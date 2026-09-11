@@ -711,6 +711,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 💾 ទាញយក Backup ទិន្នន័យ (/backup)\n\n"
         "👇 <b>សូមជ្រើសរើសម៉ឺនុយបញ្ជាខាងក្រោម៖</b>"
     )
+
+    # Clean any stuck reply keyboards beneath chat input
+    if chat and chat.type == "private":
+        try:
+            rm_msg = await context.bot.send_message(
+                chat_id=chat.id,
+                text="🧹 <i>សម្អាតប៊ូតុងក្ដារចុច...</i>",
+                parse_mode="HTML",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            await asyncio.sleep(0.3)
+            await rm_msg.delete()
+        except Exception:
+            pass
     await send_clean_bot_response(
         update=update,
         context=context,
@@ -969,17 +983,16 @@ async def clear_keyboard_command(update: Update, context: ContextTypes.DEFAULT_T
         pass
 
     try:
-        msg = await context.bot.send_message(
+        await context.bot.send_message(
             chat_id=chat.id,
-            text="✅ <b>បានលុបប៊ូតុងខាងក្រោមកន្លែងសរសេរឆាត Telegram ចេញរួចរាល់!</b>",
+            text=(
+                "✅ <b>បានលុបប៊ូតុងក្ដារចុចខាងក្រោមកន្លែងសរសេរឆាតរួចរាល់ 100%!</b>\n\n"
+                "✨ ឥឡូវនេះអេក្រង់ឆាត Telegram របស់បងមានសភាពស្រឡះល្អ គ្មានប៊ូតុងក្ដារចុចទើសកន្លែងវាយអក្សរទៀតឡើយ។\n\n"
+                "💡 <i>នៅពេលចង់បើកផ្ទាំងបញ្ជា Admin ឬពិនិត្យអតិថិជន បងគ្រាន់តែវាយ <code>/admin</code> ឬ <code>/clients</code> បានគ្រប់ពេល!</i>"
+            ),
             parse_mode="HTML",
             reply_markup=ReplyKeyboardRemove()
         )
-        await asyncio.sleep(4)
-        try:
-            await msg.delete()
-        except Exception:
-            pass
     except Exception as e:
         logger.debug(f"clear_keyboard note: {e}")
 
@@ -2318,6 +2331,7 @@ async def post_init_setup(application):
             BotCommand("backup", "💾 ទាញយក Backup ទិន្នន័យ (.json)"),
             BotCommand("rules", "🛡️ គោលការណ៍សុវត្ថិភាព"),
             BotCommand("id", "🆔 ឆែក Chat ID & User ID"),
+            BotCommand("clear", "🧹 លុបប៊ូតុងក្ដារចុចក្រោមកន្លែងវាយឆាត (/clear)"),
         ]
         try:
             await application.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
@@ -3024,6 +3038,10 @@ def main():
     app.add_handler(CommandHandler("clearbuttons", clear_keyboard_command))
     app.add_handler(CommandHandler("nobuttons", clear_keyboard_command))
     app.add_handler(CommandHandler("resetmenu", clear_keyboard_command))
+    app.add_handler(CommandHandler("clear", clear_keyboard_command))
+    app.add_handler(CommandHandler("removekeyboard", clear_keyboard_command))
+    app.add_handler(CommandHandler("delkeyboard", clear_keyboard_command))
+    app.add_handler(CommandHandler("hidekeyboard", clear_keyboard_command))
 
     # Master Super Admin Commands
     app.add_handler(CommandHandler("admin", admin_panel_command))

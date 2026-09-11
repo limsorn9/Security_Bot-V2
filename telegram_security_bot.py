@@ -699,40 +699,17 @@ async def handle_bot_added_to_group(update: Update, context: ContextTypes.DEFAUL
 
 # ==================== DYNAMIC KEYBOARD BUILDER ====================
 
-def get_master_owner_keyboard() -> ReplyKeyboardMarkup:
+def get_master_owner_keyboard():
     """
-    ផ្ទាំងប៊ូតុងបញ្ជាពេញលេញ ៨ ជម្រើសសម្រាប់ Master Owner (240224709)
+    លុបប៊ូតុងក្ដារចុចខាងក្រោមកន្លែងសរសេរឆាត (Reply Keyboard) ចេញទាំងស្រុង
+    ដើម្បីកុំឱ្យទើសអេក្រង់ ឬរំខានដល់ការវាយអក្សរ
     """
-    keyboard = [
-        [
-            KeyboardButton("⚙️ ផ្ទាំងគ្រប់គ្រង Admin Dashboard"),
-            KeyboardButton("📋 បញ្ជីអតិថិជន & Group")
-        ],
-        [
-            KeyboardButton("📜 ប្រវត្តិការពារ & ការទិញបត"),
-            KeyboardButton("🛡️ ឆែកស្ថានភាព Bot")
-        ],
-        [
-            KeyboardButton("📢 ផ្សាយពាណិជ្ជកម្មទៅ Channel"),
-            KeyboardButton("🆔 មើលលេខ ID")
-        ],
-        [
-            KeyboardButton("❓ ការណែនាំ & ជំនួយ"),
-            KeyboardButton("🚀 ចាប់ផ្ដើម Bot ឡើងវិញ (/start)")
-        ]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+    return ReplyKeyboardRemove()
 
 
-def get_client_admin_keyboard() -> ReplyKeyboardMarkup:
-    """ផ្ទាំងប៊ូតុងធម្មតា ២ សម្រាប់ Client Group Admins ក្នុង Group"""
-    keyboard = [
-        [
-            KeyboardButton("🛡️ ឆែកស្ថានភាព Bot"),
-            KeyboardButton("🆔 មើលលេខ ID Group")
-        ]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+def get_client_admin_keyboard():
+    """លុបប៊ូតុងក្ដារចុចខាងក្រោមកន្លែងសរសេរឆាត (Reply Keyboard) ចេញទាំងស្រុង"""
+    return ReplyKeyboardRemove()
 
 
 # ==================== MALWARE DETECTION RULES ====================
