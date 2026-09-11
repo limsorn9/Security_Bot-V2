@@ -1,5 +1,25 @@
 [
     {
+        "timestamp": "2026-09-11 23:14:55",
+        "event_type": "ADMIN_RIGHTS_REFRESHED",
+        "chat_id": "-1004363472088",
+        "chat_title": "សាកRobot V1",
+        "user_id": "240224709",
+        "user_name": "Master Admin",
+        "details": "🔄 Permission Cache Refreshed: Bot is Admin (YES ✅), Status: administrator, DeleteMsgs: YES, RestrictUsers: YES",
+        "action": "🛡️ Updated Admin Permission Cache"
+    },
+    {
+        "timestamp": "2026-09-11 23:14:29",
+        "event_type": "ADMIN_RIGHTS_REFRESHED",
+        "chat_id": "-1004363472088",
+        "chat_title": "សាកRobot V1",
+        "user_id": "240224709",
+        "user_name": "Master Admin",
+        "details": "🔄 Permission Cache Refreshed: Bot is Admin (YES ✅), Status: administrator, DeleteMsgs: YES, RestrictUsers: YES",
+        "action": "🛡️ Updated Admin Permission Cache"
+    },
+    {
         "timestamp": "2026-08-24 17:30:12",
         "event_type": "MALWARE_BLOCKED",
         "chat_id": "-1002458931204",

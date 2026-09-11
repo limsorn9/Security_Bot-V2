@@ -1,6 +1,6 @@
 export interface GroupConfig {
   title: string;
-  chat_id: number;
+  chat_id: number | string;
   added_at: string;
   is_authorized: boolean;
   is_enabled: boolean;
@@ -9,10 +9,16 @@ export interface GroupConfig {
   activated_date: string;
   expiry_date: string;
   last_reminder_ts: number;
-  added_by_id: number | null;
+  added_by_id: number | string | null;
   added_by_name: string | null;
   added_by_username: string | null;
   threats_blocked_count: number;
+  bot_is_admin?: boolean;
+  admin_status?: string;
+  admin_ids?: string[];
+  admin_rights?: Record<string, boolean>;
+  last_admin_check?: string;
+  last_permission_refresh?: string;
 }
 
 export interface PurchaseHistoryItem {

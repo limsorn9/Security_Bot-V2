@@ -24,7 +24,8 @@ import {
   FileText,
   Send,
   ExternalLink,
-  Check
+  Check,
+  ShieldCheck
 } from "lucide-react";
 
 interface GroupManagerProps {
@@ -73,6 +74,54 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
   const [newAdminId, setNewAdminId] = useState("");
   const [selectedPlanDays, setSelectedPlanDays] = useState<string>("30");
   const [isAutoActive, setIsAutoActive] = useState(true);
+
+  // Fix Admin Status State & Handler
+  const [fixingGroupId, setFixingGroupId] = useState<string | null>(null);
+  const [fixAdminFeedback, setFixAdminFeedback] = useState<{
+    groupId: string;
+    status: "success" | "error";
+    message: string;
+    bot_is_admin?: boolean;
+    permissions?: Record<string, boolean>;
+  } | null>(null);
+
+  const handleFixAdminStatus = async (groupId: string, title?: string) => {
+    setFixingGroupId(groupId);
+    try {
+      const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/fix-admin-rights`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setFixAdminFeedback({
+          groupId,
+          status: "success",
+          message: data.message || `បាន Refresh Permission Cache សម្រាប់ "${title || groupId}" រួចរាល់!`,
+          bot_is_admin: data.bot_is_admin,
+          permissions: data.permissions
+        });
+        if (onGroupAction) {
+          await onGroupAction(groupId, "fix_admin_rights", { silent: true });
+        }
+      } else {
+        setFixAdminFeedback({
+          groupId,
+          status: "error",
+          message: data.message || `បរាជ័យក្នុងការ Refresh សិទ្ធិ Admin សម្រាប់ "${title || groupId}"`
+        });
+      }
+    } catch (err: any) {
+      console.error("Failed to fix admin status:", err);
+      setFixAdminFeedback({
+        groupId,
+        status: "error",
+        message: `មានបញ្ហាក្នុងការតភ្ជាប់ Refresh សិទ្ធិ Admin: ${err?.message || "Unknown error"}`
+      });
+    } finally {
+      setFixingGroupId(null);
+    }
+  };
 
   const groupList = (Object.entries(groups) as [string, GroupConfig][]).filter(([id, g]) => {
     const q = searchTerm.toLowerCase();
@@ -245,6 +294,54 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column (5/12): Group Selection List */}
         <div className="lg:col-span-5 space-y-3">
+          {/* Feedback alert after fixing admin status */}
+          {fixAdminFeedback && (
+            <div
+              className={`p-3 rounded-xl border text-xs flex items-start justify-between gap-2 transition-all shadow-2xs ${
+                fixAdminFeedback.status === "success"
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+                  : "bg-rose-50 border-rose-200 text-rose-900"
+              }`}
+            >
+              <div className="flex items-start gap-2 min-w-0">
+                {fixAdminFeedback.status === "success" ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <div className="font-bold flex items-center gap-1.5 flex-wrap">
+                    <span>
+                      {fixAdminFeedback.status === "success"
+                        ? "✅ បាន Refresh Permission Cache រួចរាល់"
+                        : "⚠️ បរាជ័យក្នុងការ Refresh សិទ្ធិ"}
+                    </span>
+                    {fixAdminFeedback.bot_is_admin !== undefined && (
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
+                          fixAdminFeedback.bot_is_admin
+                            ? "bg-emerald-200/80 text-emerald-900"
+                            : "bg-amber-200/80 text-amber-900"
+                        }`}
+                      >
+                        {fixAdminFeedback.bot_is_admin ? "Bot is Admin" : "Bot Not Admin Yet"}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-[11px] leading-relaxed opacity-90">{fixAdminFeedback.message}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFixAdminFeedback(null)}
+                className="text-gray-400 hover:text-gray-600 text-sm font-bold ml-1 cursor-pointer"
+                title="បិទ"
+              >
+                ×
+              </button>
+            </div>
+          )}
+
           <div className="flex items-center justify-between text-[11px] font-bold text-[#708499] uppercase tracking-wider px-1">
             <span>បញ្ជីក្រុម Telegram ({groupList.length})</span>
             {groupKeys.length > 0 && (
@@ -259,6 +356,7 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
               const isSelected = activeGroupId === id;
               const isActive = g.is_authorized && g.is_enabled;
               const isPaused = g.is_authorized && !g.is_enabled;
+              const isFixingThis = fixingGroupId === id;
 
               return (
                 <div
@@ -317,6 +415,57 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
                   <div className="mt-2 flex items-center justify-between text-[11px] text-[#708499]">
                     <span className="font-mono text-[10px]">ID: {id}</span>
                     <span className="text-[#1c2733] font-medium">{getRemainingDays(g.expiry_date, g.is_lifetime)}</span>
+                  </div>
+
+                  {/* Fix Admin Status Row Action Bar */}
+                  <div className="mt-2.5 pt-2 border-t border-[#e1e5eb]/70 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {g.bot_is_admin ? (
+                        <span
+                          title="Bot មានសិទ្ធិ Admin រួចរាល់ក្នុង Telegram"
+                          className="inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded shrink-0"
+                        >
+                          <Check className="w-2.5 h-2.5 text-emerald-600" /> Bot Admin
+                        </span>
+                      ) : g.last_admin_check ? (
+                        <span
+                          title="Bot មិនទាន់ជា Admin ឬត្រូវ Promote ក្នុង Telegram Group"
+                          className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded shrink-0"
+                        >
+                          <AlertCircle className="w-2.5 h-2.5 text-amber-600" /> ត្រូវ Promote
+                        </span>
+                      ) : (
+                        <span
+                          title="ចុច 'Fix Admin Status' ដើម្បី Refresh Permission Cache"
+                          className="text-[9px] text-[#708499] font-medium truncate"
+                        >
+                          មិនទាន់ Check សិទ្ធិ
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      id={`fix-admin-btn-${id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleFixAdminStatus(id, g.title);
+                      }}
+                      disabled={isFixingThis}
+                      title={`ចុចដើម្បី Refresh & Fix Bot Admin Rights សម្រាប់ "${g.title}"`}
+                      className={`shrink-0 px-2.5 py-1 rounded-md text-[10.5px] font-bold border flex items-center gap-1.5 transition-all cursor-pointer shadow-2xs ${
+                        isFixingThis
+                          ? "bg-amber-50 text-amber-700 border-amber-300 animate-pulse cursor-wait"
+                          : g.bot_is_admin
+                          ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200 hover:border-emerald-300"
+                          : "bg-blue-50 hover:bg-[#2481cc] text-[#2481cc] hover:text-white border-blue-200 hover:border-[#2481cc]"
+                      }`}
+                    >
+                      <ShieldCheck
+                        className={`w-3.5 h-3.5 ${isFixingThis ? "animate-spin text-amber-600" : ""}`}
+                      />
+                      <span>{isFixingThis ? "កំពុង Fix..." : "Fix Admin Status"}</span>
+                    </button>
                   </div>
                 </div>
               );
@@ -438,6 +587,51 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
                   <span className="text-[#708499] uppercase font-bold text-[10px] tracking-wider">ស្ថិតិការពារ (Threat Stats)</span>
                   <div className="text-[#1c2733] text-[11px]">☣️ មេរោគបានទប់ស្កាត់៖ <span className="font-bold text-rose-600 font-mono">{selectedGroup.threats_blocked_count || 0}</span></div>
                   <div className="text-[#1c2733] text-[11px]">🌊 Anti-Flood Spam៖ <span className="font-bold text-[#2481cc] font-mono">{selectedClient?.security_stats?.spams_blocked || 0}</span></div>
+                </div>
+              </div>
+
+              {/* Bot Admin Rights & Permission Cache Banner */}
+              <div className="bg-[#f8fafc] border border-[#e1e5eb] rounded-xl p-3.5 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-[#1c2733] font-bold text-xs flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-[#2481cc]" />
+                    <span>ស្ថានភាពសិទ្ធិ Bot Admin (Permission Cache)</span>
+                  </span>
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                      selectedGroup.bot_is_admin
+                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                        : "bg-amber-50 text-amber-700 border-amber-200"
+                    }`}
+                  >
+                    {selectedGroup.bot_is_admin ? "✅ Administrator" : "⚠️ Pending Promotion"}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] pt-1">
+                  <div className="bg-white border border-[#e1e5eb] p-2 rounded-lg">
+                    <div className="text-[#708499] text-[10px]">Delete Msgs</div>
+                    <div className="font-bold text-[#1c2733]">
+                      {selectedGroup.admin_rights?.can_delete_messages !== false ? "✅ អនុញ្ញាត" : "❌ គ្មាន"}
+                    </div>
+                  </div>
+                  <div className="bg-white border border-[#e1e5eb] p-2 rounded-lg">
+                    <div className="text-[#708499] text-[10px]">Restrict Users</div>
+                    <div className="font-bold text-[#1c2733]">
+                      {selectedGroup.admin_rights?.can_restrict_members !== false ? "✅ អនុញ្ញាត" : "❌ គ្មាន"}
+                    </div>
+                  </div>
+                  <div className="bg-white border border-[#e1e5eb] p-2 rounded-lg">
+                    <div className="text-[#708499] text-[10px]">Pin Messages</div>
+                    <div className="font-bold text-[#1c2733]">
+                      {selectedGroup.admin_rights?.can_pin_messages !== false ? "✅ អនុញ្ញាត" : "❌ គ្មាន"}
+                    </div>
+                  </div>
+                  <div className="bg-white border border-[#e1e5eb] p-2 rounded-lg">
+                    <div className="text-[#708499] text-[10px]">Last Cache Refresh</div>
+                    <div className="font-mono text-[10px] text-[#708499] truncate">
+                      {selectedGroup.last_admin_check ? selectedGroup.last_admin_check.split(" ")[0] : "មិនទាន់ Refresh"}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -574,6 +768,18 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
                   >
                     <ExternalLink className="w-3.5 h-3.5 text-slate-600" />
                     <span>🚪 ចាកចេញពីក្រុម (Leave)</span>
+                  </button>
+
+                  {/* Fix Admin Status & Refresh Permission Cache */}
+                  <button
+                    disabled={isLoading || fixingGroupId === activeGroupId}
+                    onClick={() => handleFixAdminStatus(activeGroupId, selectedGroup.title)}
+                    id="fix-admin-btn-detail"
+                    className="col-span-2 sm:col-span-3 bg-blue-50 hover:bg-blue-100 text-[#2481cc] border border-blue-200 p-2.5 rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer font-bold shadow-2xs"
+                    title="Refresh Bot Admin Status & Permission Cache via /api/groups/:groupId/fix-admin-rights"
+                  >
+                    <ShieldCheck className={`w-4 h-4 ${fixingGroupId === activeGroupId ? "animate-spin text-amber-600" : "text-[#2481cc]"}`} />
+                    <span>{fixingGroupId === activeGroupId ? "កំពុង Fix & Refresh Admin Status..." : "🛡️ Fix Admin Status (Refresh Cache)"}</span>
                   </button>
 
                   {/* Delete Single Group */}

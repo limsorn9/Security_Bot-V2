@@ -295,6 +295,21 @@ export default function App() {
         if (payload?.onComplete) {
           payload.onComplete(syncData);
         }
+      } else if (action === "fix_admin_rights") {
+        const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/fix-admin-rights`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+        const fixData = await res.json();
+        if (!payload?.silent) {
+          setToastMessage({
+            title: fixData.bot_is_admin ? "🛡️ Fix Admin Status ជោគជ័យ" : "⚠️ Update Admin Status",
+            body: fixData.message || `បាន Refresh Permission Cache សម្រាប់ Group ${groupId} រួចរាល់!`
+          });
+        }
+        if (payload?.onComplete) {
+          payload.onComplete(fixData);
+        }
       } else {
         const res = await fetch(`/api/groups/${groupId}/action`, {
           method: "POST",
