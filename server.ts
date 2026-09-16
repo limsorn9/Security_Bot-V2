@@ -987,22 +987,40 @@ app.post("/api/groups/recall-groups", async (_req, res) => {
   const settings = readJsonFile(SETTINGS_FILE, DEFAULT_SETTINGS) as any;
   let recalledSource = "Local Persistent Vault (ចងចាំក្នុងបតរហូត)";
   let ghResult: any = null;
+  let ghSuccess = false;
 
   if (settings.github_token && settings.github_repo && settings.github_sync_enabled !== false) {
     ghResult = await pullFromGitHub();
     if (ghResult.success) {
+      ghSuccess = true;
       recalledSource = `GitHub Repository (${settings.github_repo}@${settings.github_branch || "main"})`;
+    } else {
+      recalledSource = `Local Persistent Vault (GitHub Pull មិនជោគជ័យ: ${ghResult.message})`;
     }
   }
 
   const groups = readJsonFile<Record<string, any>>(GROUPS_FILE, {});
   const clients = readJsonFile<Record<string, any>>(CLIENTS_FILE, {});
+  const groupCount = Object.keys(groups).length;
+  const clientCount = Object.keys(clients).length;
+
+  if (groupCount === 0) {
+    return res.json({
+      success: false,
+      message: `⚠️ ការហៅបញ្ជីក្រុមបរាជ័យ: រកមិនឃើញក្រុមណាមួយនៅក្នុងប្រព័ន្ធ ឬ GitHub ឡើយ។ (${recalledSource})`,
+      total_groups: 0,
+      total_clients: clientCount,
+      groups: {},
+      clients,
+      github_result: ghResult
+    });
+  }
 
   res.json({
     success: true,
-    message: `✅ បានហៅបញ្ជីក្រុមមកវិញជោគជ័យ! ប្រភព៖ ${recalledSource}`,
-    total_groups: Object.keys(groups).length,
-    total_clients: Object.keys(clients).length,
+    message: `✅ បានហៅបញ្ជីក្រុមមកវិញជោគជ័យចំនួន ${groupCount} ក្រុម និងអតិថិជន ${clientCount} នាក់! (ប្រភព៖ ${recalledSource})`,
+    total_groups: groupCount,
+    total_clients: clientCount,
     groups,
     clients,
     github_result: ghResult

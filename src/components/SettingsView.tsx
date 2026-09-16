@@ -152,10 +152,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       });
       const data = await res.json();
       if (data.success) {
+        const totalGroups = data.total_groups ?? data.groups_count ?? 0;
         setRecallGroupsFeedback({
           success: true,
-          message: data.message || `បានហៅបញ្ជីក្រុមមកវិញជោគជ័យ (${data.groups_count || 0} ក្រុម)!`,
-          count: data.groups_count
+          message: data.message || `បានហៅបញ្ជីក្រុមមកវិញជោគជ័យ (${totalGroups} ក្រុម)!`,
+          count: totalGroups
         });
         if (onRefreshAllData) onRefreshAllData();
         setTimeout(() => setRecallGroupsFeedback(null), 8000);

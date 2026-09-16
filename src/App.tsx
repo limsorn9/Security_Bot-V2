@@ -69,8 +69,22 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
-  const [toastMessage, setToastMessage] = useState<{ title: string; body: string } | null>(null);
+  const [toastMessage, setToastMessage] = useState<{
+    title: string;
+    body: string;
+    type?: "success" | "error" | "warning" | "info";
+  } | null>(null);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+
+  // Auto-dismiss toast notification after 7 seconds
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => {
+        setToastMessage(null);
+      }, 7000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   // Check initial notification permission on mount
   useEffect(() => {
@@ -290,7 +304,7 @@ export default function App() {
     }
   };
 
-  // Handle Group Action (add days, lifetime, revoke, toggle, delete, clear_all, direct_add)
+  // Handle Group Action (add days, lifetime, revoke, toggle, delete, clear_all, direct_add, sync, recall)
   const handleGroupAction = async (groupId: string, action: string, payload?: any) => {
     setIsLoading(true);
     try {
@@ -299,8 +313,26 @@ export default function App() {
         await res.json();
         setToastMessage({
           title: "🗑️ បានលុប Group ទាំងអស់",
-          body: "ទិន្នន័យក្រុមចាស់ៗទាំងអស់ត្រូវបានសម្អាតចេញពីប្រព័ន្ធដោយជោគជ័យ។"
+          body: "ទិន្នន័យក្រុមចាស់ៗទាំងអស់ត្រូវបានសម្អាតចេញពីប្រព័ន្ធដោយជោគជ័យ។",
+          type: "info"
         });
+      } else if (action === "sync_to_github") {
+        const res = await fetch("/api/github/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "push", reason: payload?.reason || "Dashboard Manual Sync" })
+        });
+        const ghData = await res.json();
+        if (!payload?.silent) {
+          setToastMessage({
+            title: ghData.success ? "✅ ជោគជ័យ: Sync ទៅ GitHub" : "⚠️ បរាជ័យ: Sync ទៅ GitHub",
+            body: ghData.message || (ghData.success ? "បានធ្វើសមកាលកម្មក្រុមទៅកាន់ GitHub Mirror ដោយជោគជ័យ!" : "មិនអាច Sync ទៅកាន់ GitHub បានទេ"),
+            type: ghData.success ? "success" : "error"
+          });
+        }
+        if (payload?.onComplete) {
+          payload.onComplete(ghData);
+        }
       } else if (action === "sync_from_telegram") {
         const res = await fetch("/api/groups/sync-from-telegram", {
           method: "POST",
@@ -308,10 +340,15 @@ export default function App() {
           body: JSON.stringify({ manualInput: payload?.manualInput })
         });
         const syncData = await res.json();
-        setToastMessage({
-          title: syncData.newly_imported_count > 0 ? "🎉 បាន Sync ក្រុមដោយជោគជ័យ" : "✅ បាន Sync ពិនិត្យបញ្ជីក្រុមរួចរាល់",
-          body: syncData.message || `បានរកឃើញ ${syncData.total_discovered || 0} ក្រុម។`
-        });
+        if (!payload?.silent) {
+          setToastMessage({
+            title: syncData.success
+              ? (syncData.newly_imported_count > 0 ? "🎉 ជោគជ័យ: បានរកឃើញ និង Sync ក្រុមថ្មី" : "✅ ជោគជ័យ: បាន Sync ពិនិត្យក្រុមរួចរាល់")
+              : "⚠️ បរាជ័យ: Sync ក្រុម Telegram",
+            body: syncData.message || `បានរកឃើញ ${syncData.total_discovered || 0} ក្រុម។`,
+            type: syncData.success ? "success" : "error"
+          });
+        }
         if (payload?.onComplete) {
           payload.onComplete(syncData);
         }
@@ -321,10 +358,13 @@ export default function App() {
           headers: { "Content-Type": "application/json" }
         });
         const recallData = await res.json();
-        setToastMessage({
-          title: recallData.success ? "📥 ហៅបញ្ជីក្រុមជោគជ័យ (Recall)" : "⚠️ បរាជ័យក្នុងការហៅបញ្ជីក្រុម",
-          body: recallData.message || `បានទាញយក ${recallData.groups_count || 0} ក្រុមពី GitHub & Vault!`
-        });
+        if (!payload?.silent) {
+          setToastMessage({
+            title: recallData.success ? "✅ ជោគជ័យ: បានហៅបញ្ជីក្រុម (Recall Group)" : "⚠️ បរាជ័យ: ហៅបញ្ជីក្រុមមិនជោគជ័យ",
+            body: recallData.message || (recallData.success ? `បានទាញយក ${recallData.total_groups || 0} ក្រុមពី GitHub & Vault!` : "រកមិនឃើញក្រុមដើម្បីហៅមកវិញឡើយ"),
+            type: recallData.success ? "success" : "error"
+          });
+        }
         if (payload?.onComplete) {
           payload.onComplete(recallData);
         }
@@ -337,7 +377,8 @@ export default function App() {
         if (!payload?.silent) {
           setToastMessage({
             title: fixData.bot_is_admin ? "🛡️ Fix Admin Status ជោគជ័យ" : "⚠️ Update Admin Status",
-            body: fixData.message || `បាន Refresh Permission Cache សម្រាប់ Group ${groupId} រួចរាល់!`
+            body: fixData.message || `បាន Refresh Permission Cache សម្រាប់ Group ${groupId} រួចរាល់!`,
+            type: fixData.bot_is_admin ? "success" : "warning"
           });
         }
         if (payload?.onComplete) {
@@ -433,32 +474,62 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-full bg-[#f1f4f9] text-[#1c2733] font-sans overflow-hidden">
-      {/* Real-time Threat Toast Banner */}
+      {/* Real-time Toast Notification Banner */}
       {toastMessage && (
-        <div className="fixed top-4 right-4 z-50 max-w-sm bg-[#1c2733] border border-rose-500/50 text-white p-4 rounded-xl shadow-2xl animate-bounce duration-300 flex items-start gap-3">
-          <div className="p-2 bg-rose-500/20 text-rose-400 rounded-lg shrink-0 mt-0.5">
-            <AlertTriangle className="w-5 h-5" />
+        <div
+          className={`fixed top-4 right-4 z-50 max-w-sm rounded-xl shadow-2xl p-4 flex items-start gap-3 border transition-all duration-300 ${
+            toastMessage.type === "success"
+              ? "bg-[#0b1f14] border-emerald-500/70 text-emerald-100"
+              : toastMessage.type === "warning"
+              ? "bg-[#231b09] border-amber-500/70 text-amber-100"
+              : toastMessage.type === "info"
+              ? "bg-[#0c1f33] border-sky-500/70 text-sky-100"
+              : "bg-[#1c2733] border-rose-500/70 text-white"
+          }`}
+        >
+          <div
+            className={`p-2 rounded-lg shrink-0 mt-0.5 ${
+              toastMessage.type === "success"
+                ? "bg-emerald-500/20 text-emerald-400"
+                : toastMessage.type === "warning"
+                ? "bg-amber-500/20 text-amber-400"
+                : toastMessage.type === "info"
+                ? "bg-sky-500/20 text-sky-400"
+                : "bg-rose-500/20 text-rose-400"
+            }`}
+          >
+            {toastMessage.type === "success" ? (
+              <CheckCircle className="w-5 h-5" />
+            ) : toastMessage.type === "info" ? (
+              <RefreshCw className="w-5 h-5" />
+            ) : (
+              <AlertTriangle className="w-5 h-5" />
+            )}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between">
-              <h4 className="font-bold text-xs text-rose-300 truncate">{toastMessage.title}</h4>
+              <h4
+                className={`font-bold text-xs truncate ${
+                  toastMessage.type === "success"
+                    ? "text-emerald-300"
+                    : toastMessage.type === "warning"
+                    ? "text-amber-300"
+                    : toastMessage.type === "info"
+                    ? "text-sky-300"
+                    : "text-rose-300"
+                }`}
+              >
+                {toastMessage.title}
+              </h4>
               <button
                 onClick={() => setToastMessage(null)}
-                className="text-[#8a9fb5] hover:text-white text-xs ml-2"
+                className="text-gray-400 hover:text-white text-xs ml-2 cursor-pointer font-bold px-1"
+                title="បិទ"
               >
                 ×
               </button>
             </div>
-            <p className="text-[11px] text-[#cfd8dc] mt-1 leading-snug">{toastMessage.body}</p>
-            <button
-              onClick={() => {
-                setActiveTab("logs");
-                setToastMessage(null);
-              }}
-              className="mt-2 text-[10px] text-[#64b5f6] hover:underline font-semibold"
-            >
-              មើលកំណត់ត្រាសន្តិសុខ →
-            </button>
+            <p className="text-[11px] text-gray-200 mt-1 leading-snug break-words">{toastMessage.body}</p>
           </div>
         </div>
       )}

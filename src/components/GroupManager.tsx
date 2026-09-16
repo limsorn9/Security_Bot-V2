@@ -85,14 +85,92 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
     permissions?: Record<string, boolean>;
   } | null>(null);
 
-  // Group Recall from GitHub / Persistent Vault
+  // Group Recall and GitHub Sync State
   const [isRecalling, setIsRecalling] = useState(false);
+  const [isSyncingGithub, setIsSyncingGithub] = useState(false);
+  const [operationFeedback, setOperationFeedback] = useState<{
+    type: "success" | "error";
+    title: string;
+    message: string;
+    details?: string;
+    timestamp: string;
+  } | null>(null);
+
   const handleRecall = async () => {
     setIsRecalling(true);
+    setOperationFeedback(null);
     try {
-      await onGroupAction("recall", "recall_groups");
+      const res = await fetch("/api/groups/recall-groups", { method: "POST" });
+      const data = await res.json();
+      const now = new Date().toLocaleTimeString();
+      if (data.success) {
+        setOperationFeedback({
+          type: "success",
+          title: "✅ ជោគជ័យ: បានហៅបញ្ជីក្រុមមកវិញ (Recall Group Success)",
+          message: data.message || `បានទាញយកទិន្នន័យ ${data.total_groups || 0} ក្រុម និងអតិថិជន ${data.total_clients || 0} នាក់មកវិញដោយជោគជ័យ!`,
+          details: `ប្រភពទិន្នន័យ៖ ${data.github_result?.success ? "GitHub Remote Mirror + Local Vault" : "Local Persistent Vault"} | ចំនួនក្រុមសរុប៖ ${data.total_groups || 0}`,
+          timestamp: now
+        });
+        await onGroupAction("recall", "recall_groups", { silent: true });
+      } else {
+        setOperationFeedback({
+          type: "error",
+          title: "⚠️ បរាជ័យ: ហៅបញ្ជីក្រុមមិនជោគជ័យ (Recall Group Failed)",
+          message: data.message || "រកមិនឃើញក្រុមណាមួយនៅក្នុង Local Vault ឬ GitHub Repository ឡើយ!",
+          details: "សូមពិនិត្យមើលការកំណត់ GitHub Token & Repo ក្នុងទំព័រ Settings ឬ Add Bot ចូលក្នុងក្រុម Telegram របស់អ្នកឡើងវិញ។",
+          timestamp: now
+        });
+      }
+    } catch (err: any) {
+      setOperationFeedback({
+        type: "error",
+        title: "⚠️ បរាជ័យ: បរាជ័យក្នុងការតភ្ជាប់ Server (Recall Error)",
+        message: err?.message || "មានបញ្ហាក្នុងការទាញយកទិន្នន័យពី Server",
+        timestamp: new Date().toLocaleTimeString()
+      });
     } finally {
       setIsRecalling(false);
+    }
+  };
+
+  const handleSyncGithub = async () => {
+    setIsSyncingGithub(true);
+    setOperationFeedback(null);
+    try {
+      const res = await fetch("/api/github/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "push", reason: "GroupManager Direct Auto-Sync" })
+      });
+      const data = await res.json();
+      const now = new Date().toLocaleTimeString();
+      if (data.success) {
+        setOperationFeedback({
+          type: "success",
+          title: "✅ ជោគជ័យ: បានធ្វើសមកាលកម្មក្រុមទៅ GitHub (Sync Group Success)",
+          message: data.message || "បាន Sync បញ្ជីក្រុម និងអតិថិជនទៅកាន់ GitHub Repository ដោយជោគជ័យ!",
+          details: `កាលបរិច្ឆេទធ្វើបច្ចុប្បន្នភាព៖ ${now} | ធានាសុវត្ថិភាពទិន្នន័យចងចាំរហូត (Never-Forget Vault)`,
+          timestamp: now
+        });
+        await onGroupAction("sync", "sync_to_github", { silent: true });
+      } else {
+        setOperationFeedback({
+          type: "error",
+          title: "⚠️ បរាជ័យ: ធ្វើសមកាលកម្មទៅ GitHub មិនជោគជ័យ (Sync Group Failed)",
+          message: data.message || "មិនអាចធ្វើសមកាលកម្មទៅកាន់ GitHub បានឡើយ!",
+          details: "សូមពិនិត្យមើល GitHub Token និង Repository Name នៅក្នុងទំព័រ Settings!",
+          timestamp: now
+        });
+      }
+    } catch (err: any) {
+      setOperationFeedback({
+        type: "error",
+        title: "⚠️ បរាជ័យ: មានបញ្ហាក្នុងការ Sync ទៅ GitHub",
+        message: err?.message || "Connection error",
+        timestamp: new Date().toLocaleTimeString()
+      });
+    } finally {
+      setIsSyncingGithub(false);
     }
   };
 
@@ -191,15 +269,40 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
   const handleTriggerSync = async (manualText?: string) => {
     setIsSyncing(true);
     setSyncResult(null);
+    setOperationFeedback(null);
     try {
       await onGroupAction("sync", "sync_from_telegram", {
         manualInput: manualText,
         onComplete: (data: any) => {
           setSyncResult(data);
-          if (data?.newly_imported?.length > 0 && !selectedGroupId) {
-            setSelectedGroupId(data.newly_imported[0].id);
+          const now = new Date().toLocaleTimeString();
+          if (data?.success) {
+            setOperationFeedback({
+              type: "success",
+              title: "✅ ជោគជ័យ: បាន Sync ក្រុម Telegram (Telegram Sync Success)",
+              message: data.message || `បានរកឃើញ ${data.total_discovered || 0} ក្រុម និងនាំចូល ${data.newly_imported_count || 0} ក្រុមថ្មី!`,
+              details: `ក្រុមថ្មី៖ ${data.newly_imported_count || 0} | ក្រុមដែលមានរួចហើយ៖ ${data.already_existing_count || 0}`,
+              timestamp: now
+            });
+            if (data?.newly_imported?.length > 0 && !selectedGroupId) {
+              setSelectedGroupId(data.newly_imported[0].id);
+            }
+          } else {
+            setOperationFeedback({
+              type: "error",
+              title: "⚠️ បរាជ័យ: Sync ក្រុម Telegram មិនជោគជ័យ",
+              message: data?.message || "មិនអាចទាញយកទិន្នន័យពី Telegram API បានឡើយ",
+              timestamp: now
+            });
           }
         }
+      });
+    } catch (err: any) {
+      setOperationFeedback({
+        type: "error",
+        title: "⚠️ បរាជ័យ: កំហុសពេល Sync ក្រុមពី Telegram",
+        message: err?.message || "Connection error",
+        timestamp: new Date().toLocaleTimeString()
       });
     } finally {
       setIsSyncing(false);
@@ -276,6 +379,19 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
             <span>{isRecalling ? "កំពុង Recall..." : "📥 ហៅក្រុម (Recall)"}</span>
           </button>
 
+          {/* Sync to GitHub Button */}
+          <button
+            type="button"
+            id="btn_sync_github_groupmanager"
+            onClick={handleSyncGithub}
+            disabled={isSyncingGithub}
+            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-300 font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer shadow-sm disabled:opacity-60"
+            title="ធ្វើសមកាលកម្ម (Sync Group) ទៅកាន់ GitHub Repository Mirror"
+          >
+            <DownloadCloud className={`w-3.5 h-3.5 text-indigo-600 ${isSyncingGithub ? "animate-spin" : ""}`} />
+            <span>{isSyncingGithub ? "កំពុង Sync..." : "⚡ Sync ទៅ GitHub"}</span>
+          </button>
+
           {/* Sync / Fetch from Telegram Button */}
           <button
             type="button"
@@ -313,6 +429,53 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Real-time Operation Feedback Notification Banner (Recall / Sync Group Result) */}
+      {operationFeedback && (
+        <div
+          className={`p-4 rounded-xl border shadow-sm transition-all duration-300 flex items-start justify-between gap-3 ${
+            operationFeedback.type === "success"
+              ? "bg-emerald-50/90 border-emerald-400/80 text-emerald-950"
+              : "bg-rose-50/90 border-rose-400/80 text-rose-950"
+          }`}
+        >
+          <div className="flex items-start gap-3">
+            <div
+              className={`p-2 rounded-lg shrink-0 mt-0.5 ${
+                operationFeedback.type === "success"
+                  ? "bg-emerald-200/70 text-emerald-800"
+                  : "bg-rose-200/70 text-rose-800"
+              }`}
+            >
+              {operationFeedback.type === "success" ? (
+                <CheckCircle2 className="w-5 h-5" />
+              ) : (
+                <AlertTriangle className="w-5 h-5" />
+              )}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="font-bold text-xs sm:text-sm">{operationFeedback.title}</h4>
+                <span className="text-[10px] sm:text-[11px] opacity-75 font-mono">[{operationFeedback.timestamp}]</span>
+              </div>
+              <p className="text-xs mt-1 leading-relaxed">{operationFeedback.message}</p>
+              {operationFeedback.details && (
+                <p className="text-[11px] mt-1 opacity-80 font-medium">
+                  {operationFeedback.details}
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOperationFeedback(null)}
+            className="text-gray-400 hover:text-gray-700 p-1 rounded hover:bg-black/5 text-sm cursor-pointer transition-colors"
+            title="បិទការជូនដំណឹង"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Main Grid: Group List + Submenu Panel */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

@@ -465,11 +465,13 @@ def get_github_credentials():
     clean_repo = repo.replace("https://github.com/", "").replace("http://github.com/", "").rstrip("/").replace(".git", "").strip()
     return token, clean_repo, branch, enabled
 
-def sync_to_github_python(trigger_reason: str = "Auto-Sync"):
-    """Auto-sync groups & clients to GitHub repository using GitHub REST API v3 (Zero-Config)"""
+def sync_to_github_python_with_status(trigger_reason: str = "Auto-Sync") -> tuple[bool, str]:
+    """Auto-sync groups & clients to GitHub repository using GitHub REST API v3 with status notification"""
     token, repo, branch, enabled = get_github_credentials()
-    if not enabled or not token or not repo:
-        return False
+    if not enabled:
+        return False, "មុខងារ GitHub Auto-Sync ត្រូវបានបិទនៅក្នុង Settings"
+    if not token or not repo:
+        return False, "មិនទាន់បានកំណត់ GitHub Token ឬ Repository (owner/repo) ឡើយ (សូមចូល Settings ក្នុង Dashboard)"
 
     files_to_sync = [
         ("groups_config.json", GROUPS_FILE),
@@ -477,6 +479,7 @@ def sync_to_github_python(trigger_reason: str = "Auto-Sync"):
     ]
 
     synced_count = 0
+    errors = []
     for file_name, local_path in files_to_sync:
         if not os.path.exists(local_path):
             continue
@@ -527,7 +530,9 @@ def sync_to_github_python(trigger_reason: str = "Auto-Sync"):
             with urllib.request.urlopen(req_put, timeout=10) as response:
                 synced_count += 1
         except Exception as e:
-            logger.warning(f"⚠️ GitHub Sync note for {file_name}: {e}")
+            err_str = str(e)
+            logger.warning(f"⚠️ GitHub Sync note for {file_name}: {err_str}")
+            errors.append(f"{file_name}: {err_str}")
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if synced_count > 0:
@@ -541,14 +546,22 @@ def sync_to_github_python(trigger_reason: str = "Auto-Sync"):
             write_json(SETTINGS_FILE, settings)
         except Exception:
             pass
-        return True
-    return False
+        return True, f"បាន Sync {synced_count} ឯកសារទៅកាន់ GitHub ({repo}@{branch}) ដោយជោគជ័យ! ({trigger_reason})"
+    else:
+        err_detail = "; ".join(errors) if errors else "រកមិនឃើញឯកសារត្រូវ Sync ឡើយ"
+        return False, f"មិនអាច Sync ទៅ GitHub បានទេ: {err_detail}"
 
-def pull_from_github_python() -> dict:
-    """Pull groups_config.json from GitHub and perform safe 2-way merge"""
+def sync_to_github_python(trigger_reason: str = "Auto-Sync") -> bool:
+    success, _ = sync_to_github_python_with_status(trigger_reason)
+    return success
+
+def pull_from_github_python_with_status() -> tuple[dict, bool, str]:
+    """Pull groups_config.json from GitHub and perform safe 2-way merge with status message"""
     token, repo, branch, enabled = get_github_credentials()
+    if not enabled:
+        return {}, False, "GitHub Sync ត្រូវបានបិទនៅក្នុង Settings"
     if not token or not repo:
-        return {}
+        return {}, False, "មិនទាន់បានកំណត់ GitHub Token ឬ Repository (owner/repo) ឡើយ"
     try:
         url_get = f"https://api.github.com/repos/{repo}/contents/groups_config.json?ref={branch}"
         req_get = urllib.request.Request(
@@ -576,10 +589,16 @@ def pull_from_github_python() -> dict:
                 merged = {**remote_groups, **local_groups}
                 write_json(GROUPS_FILE, merged)
                 logger.info(f"📥 [GitHub Recall] Recalled {len(merged)} groups from {repo}@{branch}!")
-                return merged
+                return merged, True, f"បានទាញយកទិន្នន័យ {len(remote_groups)} ក្រុមពី GitHub ({repo}@{branch}) ដោយជោគជ័យ!"
     except Exception as e:
         logger.warning(f"⚠️ GitHub Pull note: {e}")
-    return {}
+        return {}, False, f"បរាជ័យក្នុងការទាញយកពី GitHub: {str(e)}"
+    return {}, False, "រកមិនឃើញទិន្នន័យក្រុមនៅក្នុង GitHub Repository ឡើយ"
+
+def pull_from_github_python() -> dict:
+    """Pull groups_config.json from GitHub and perform safe 2-way merge"""
+    merged, _, _ = pull_from_github_python_with_status()
+    return merged
 
 def recall_groups_storage() -> dict:
     """ហៅបញ្ជីក្រុមមកវិញទាំងស្រុងពី GitHub, Memory Vault និង Persistent Files (Never Forget Groups)"""
@@ -1738,6 +1757,77 @@ async def groups_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = "\n".join(lines)
     await send_clean_bot_response(update, context, text, reply_markup=get_groups_interactive_keyboard(), delete_seconds=180)
 
+async def recall_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command /recall សម្រាប់ហៅបញ្ជីក្រុមមកវិញ និងផ្ញើសារជូនដំណឹងពីភាពជោគជ័យ ឬបរាជ័យ"""
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        return await send_clean_bot_response(update, context, "⛔ លោកអ្នកគ្មានសិទ្ធិ!", delete_seconds=10)
+
+    _, gh_success, gh_msg = pull_from_github_python_with_status()
+    groups = recall_groups_storage()
+    count = len(groups)
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if count > 0:
+        text = (
+            "📥 <b>លទ្ធផលហៅបញ្ជីក្រុមមកវិញ (Recall Group Notification):</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <b>ស្ថានភាព:</b> ជោគជ័យ (SUCCESS)\n"
+            f"👥 <b>ចំនួនក្រុមដែលបានរកឃើញ:</b> {count} ក្រុម\n"
+            f"🌐 <b>ប្រភពទិន្នន័យ:</b> {gh_msg if gh_success else 'Local Persistent Vault'}\n"
+            f"🕒 <b>កាលបរិច្ឆេទ:</b> {now_str}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "👇 <i>សូមចុចលើប៊ូតុងឈ្មោះក្រុមខាងក្រោម ដើម្បីពិនិត្យ ឬកំណត់សិទ្ធិ៖</i>"
+        )
+        await send_clean_bot_response(update, context, text, reply_markup=get_groups_interactive_keyboard(), delete_seconds=180)
+    else:
+        text = (
+            "📥 <b>លទ្ធផលហៅបញ្ជីក្រុមមកវិញ (Recall Group Notification):</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ <b>ស្ថានភាព:</b> បរាជ័យ (FAILED)\n"
+            f"❌ <b>មូលហេតុ:</b> {gh_msg}\n"
+            f"🕒 <b>កាលបរិច្ឆេទ:</b> {now_str}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 <b>ដំណោះស្រាយ:</b> សូម Add Bot ចូល Group ឬកំណត់ GitHub Token ក្នុង Settings!"
+        )
+        empty_keyboard = [
+            [InlineKeyboardButton("🔄 សាកល្បងហៅម្ដងទៀត (Retry Recall)", callback_data="adm_recall_github")],
+            [InlineKeyboardButton("⚡ Auto-Sync ទៅ GitHub", callback_data="adm_sync_github")],
+            [InlineKeyboardButton("❌ បិទសារ", callback_data="btn_close")]
+        ]
+        await send_clean_bot_response(update, context, text, reply_markup=InlineKeyboardMarkup(empty_keyboard), delete_seconds=60)
+
+async def sync_groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command /sync សម្រាប់ធ្វើ Auto-Sync ទៅ GitHub និងផ្ញើសារជូនដំណឹងពីភាពជោគជ័យ ឬបរាជ័យ"""
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        return await send_clean_bot_response(update, context, "⛔ លោកអ្នកគ្មានសិទ្ធិ!", delete_seconds=10)
+
+    success, sync_msg = sync_to_github_python_with_status("Manual Command /sync")
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if success:
+        text = (
+            "⚡ <b>លទ្ធផលធ្វើសមកាលកម្មក្រុម (Sync Group Notification):</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <b>ស្ថានភាព:</b> ជោគជ័យ (SUCCESS)\n"
+            f"📁 <b>សារជូនដំណឹង:</b> {sync_msg}\n"
+            f"🕒 <b>កាលបរិច្ឆេទ:</b> {now_str}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "👇 <i>សូមចុចលើប៊ូតុងឈ្មោះក្រុម ដើម្បីមើល Profile និងកំណត់សិទ្ធិ៖</i>"
+        )
+    else:
+        text = (
+            "⚡ <b>លទ្ធផលធ្វើសមកាលកម្មក្រុម (Sync Group Notification):</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ <b>ស្ថានភាព:</b> បរាជ័យ (FAILED)\n"
+            f"❌ <b>មូលហេតុ:</b> {sync_msg}\n"
+            f"🕒 <b>កាលបរិច្ឆេទ:</b> {now_str}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 <b>ដំណោះស្រាយ:</b> សូមពិនិត្យ GITHUB_TOKEN និង GITHUB_REPO ក្នុង Dashboard Settings!"
+        )
+    await send_clean_bot_response(update, context, text, reply_markup=get_groups_interactive_keyboard(), delete_seconds=180)
+
 async def clients_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command /clients & /crm សម្រាប់ Master Admin មើលបញ្ជីអតិថិជន និងក្រុមដែលគាត់គ្រប់គ្រង"""
     user = update.effective_user
@@ -2507,17 +2597,36 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         elif action_type in ["recall", "recall_github"]:
-            recalled = pull_from_github_python()
-            if not recalled:
-                recalled = recall_groups_storage()
-            groups = recalled or read_json(GROUPS_FILE, {})
-            text = (
-                f"📥 <b>បានហៅបញ្ជីក្រុមមកវិញជោគជ័យ! ({len(groups)} ក្រុម)</b>\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "🌐 <b>ប្រភព៖</b> GitHub Repository + Local Persistent Vault\n"
-                "✅ ទិន្នន័យត្រូវបានផ្ទៀងផ្ទាត់ និងចងចាំក្នុង Bot រួចរាល់!\n\n"
-                "👇 <i>សូមចុចលើប៊ូតុងឈ្មោះក្រុម ដើម្បីមើល Profile និងកំណត់សិទ្ធិ៖</i>"
-            )
+            _, gh_success, gh_msg = pull_from_github_python_with_status()
+            groups = recall_groups_storage()
+            count = len(groups)
+            if count > 0:
+                alert_text = f"✅ ជោគជ័យ: បានហៅបញ្ជីក្រុមមកវិញចំនួន {count} ក្រុម!\nប្រភព៖ GitHub + Local Vault"
+                text = (
+                    "📥 <b>លទ្ធផលហៅបញ្ជីក្រុមមកវិញ (Recall Groups):</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "✅ <b>ស្ថានភាព:</b> ជោគជ័យ (SUCCESS)\n"
+                    f"👥 <b>ចំនួនក្រុមសរុប:</b> {count} ក្រុម\n"
+                    f"🌐 <b>ព័ត៌មានលម្អិត:</b> {gh_msg if gh_success else 'ហៅចេញពី Local Persistent Vault'}\n"
+                    f"🕒 <b>កាលបរិច្ឆេទ:</b> {now_str}\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "👇 <i>សូមចុចលើប៊ូតុងឈ្មោះក្រុម ដើម្បីមើល Profile និងកំណត់សិទ្ធិ៖</i>"
+                )
+            else:
+                alert_text = "⚠️ បរាជ័យ: រកមិនឃើញក្រុមណាមួយក្នុងប្រព័ន្ធ ឬ GitHub ឡើយ!"
+                text = (
+                    "📥 <b>លទ្ធផលហៅបញ្ជីក្រុមមកវិញ (Recall Groups):</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "⚠️ <b>ស្ថានភាព:</b> បរាជ័យ (FAILED)\n"
+                    f"❌ <b>មូលហេតុ:</b> {gh_msg}\n"
+                    f"🕒 <b>កាលបរិច្ឆេទ:</b> {now_str}\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "💡 <b>ដំណោះស្រាយ:</b> សូម Add Bot ចូល Group ឬកំណត់ Token ក្នុង Settings Dashboard!"
+                )
+            try:
+                await query.answer(alert_text, show_alert=True)
+            except Exception:
+                pass
             try:
                 await query.edit_message_text(text, parse_mode="HTML", reply_markup=get_groups_interactive_keyboard())
             except Exception:
@@ -2525,10 +2634,24 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         elif action_type in ["sync", "sync_github"]:
-            success = sync_to_github_python("Admin Button Trigger")
-            alert_msg = "✅ បានធ្វើសមកាលកម្ម (Auto-Sync) ទៅកាន់ GitHub Repository ដោយជោគជ័យ!" if success else "⚠️ មិនទាន់អាច Sync បានទេ សូមពិនិត្យ GITHUB_TOKEN និង GITHUB_REPO ក្នុង Settings!"
+            success, sync_msg = sync_to_github_python_with_status("Admin Button Trigger")
+            alert_msg = f"✅ ជោគជ័យ: {sync_msg}" if success else f"⚠️ បរាជ័យ: {sync_msg}"
             try:
                 await query.answer(alert_msg, show_alert=True)
+            except Exception:
+                pass
+
+            sync_status_text = (
+                "⚡ <b>លទ្ធផលធ្វើសមកាលកម្មក្រុម (Sync Group Status):</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"<b>ស្ថានភាព:</b> {'✅ ជោគជ័យ (SUCCESS)' if success else '⚠️ បរាជ័យ (FAILED)'}\n"
+                f"<b>សារជូនដំណឹង:</b> {sync_msg}\n"
+                f"<b>កាលបរិច្ឆេទ:</b> {now_str}\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "👇 <i>សូមចុចលើប៊ូតុងឈ្មោះក្រុម ដើម្បីមើល Profile និងកំណត់សិទ្ធិ៖</i>"
+            )
+            try:
+                await query.edit_message_text(sync_status_text, parse_mode="HTML", reply_markup=get_groups_interactive_keyboard())
             except Exception:
                 pass
             return
@@ -3931,8 +4054,10 @@ def main():
     app.add_handler(CommandHandler("members", clients_list_command))
     app.add_handler(CommandHandler("groups", groups_list_command))
     app.add_handler(CommandHandler("list", groups_list_command))
-    app.add_handler(CommandHandler("recall", groups_list_command))
-    app.add_handler(CommandHandler("recallgroups", groups_list_command))
+    app.add_handler(CommandHandler("recall", recall_groups_command))
+    app.add_handler(CommandHandler("recallgroups", recall_groups_command))
+    app.add_handler(CommandHandler("sync", sync_groups_command))
+    app.add_handler(CommandHandler("syncgroups", sync_groups_command))
     app.add_handler(CommandHandler("delgroup", delete_group_command))
     app.add_handler(CommandHandler("deletegroup", delete_group_command))
     app.add_handler(CommandHandler("removegroup", delete_group_command))
