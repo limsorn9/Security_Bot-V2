@@ -34,8 +34,21 @@ const DEFAULT_SETTINGS = {
   notifications_enabled: true,
   cleanup_interval_days: 30, // 0 = never, 30 = 30 days, 60 = 60 days, 90 = 90 days
   auto_purge_enabled: true,
-  dark_mode: false
+  dark_mode: false,
+  auto_admin_refresh_enabled: true,
+  github_sync_enabled: true,
+  github_token: process.env.GITHUB_TOKEN || "",
+  github_repo: process.env.GITHUB_REPO || "",
+  github_branch: process.env.GITHUB_BRANCH || "main",
+  github_auto_sync_on_new_group: true,
+  last_github_sync_time: "",
+  last_github_sync_status: "Ready",
+  last_github_sync_details: ""
 };
+
+// In-Memory Vault to guarantee groups are never forgotten in this instance
+const MEMORY_GROUPS_VAULT: Record<string, any> = {};
+const MEMORY_CLIENTS_VAULT: Record<string, any> = {};
 
 function purgeExpiredLogs(logs: any[], retentionDays: number): { retained: any[]; purgedCount: number } {
   if (!retentionDays || retentionDays <= 0) {
@@ -60,7 +73,67 @@ function readJsonFile<T>(filePath: string, fallback: T): T {
   try {
     if (fs.existsSync(filePath)) {
       const data = fs.readFileSync(filePath, "utf-8");
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+
+      // Auto-Recall & Never-Forget Mechanism for Groups
+      if (filePath.includes("groups_config.json")) {
+        if (!parsed || Object.keys(parsed).length === 0) {
+          // Check In-Memory Vault
+          if (Object.keys(MEMORY_GROUPS_VAULT).length > 0) {
+            fs.writeFileSync(filePath, JSON.stringify(MEMORY_GROUPS_VAULT, null, 4), "utf-8");
+            return { ...MEMORY_GROUPS_VAULT } as unknown as T;
+          }
+          // Check Persistent Disk Vault
+          const vaultPath = path.join(process.cwd(), "backups", "groups_persistent_vault.json");
+          const bakPath = path.join(process.cwd(), "backups", "groups_config.json.bak");
+          if (fs.existsSync(vaultPath)) {
+            try {
+              const vData = JSON.parse(fs.readFileSync(vaultPath, "utf-8"));
+              if (vData && Object.keys(vData).length > 0) {
+                fs.writeFileSync(filePath, JSON.stringify(vData, null, 4), "utf-8");
+                Object.assign(MEMORY_GROUPS_VAULT, vData);
+                return vData as unknown as T;
+              }
+            } catch {}
+          } else if (fs.existsSync(bakPath)) {
+            try {
+              const bData = JSON.parse(fs.readFileSync(bakPath, "utf-8"));
+              if (bData && Object.keys(bData).length > 0) {
+                fs.writeFileSync(filePath, JSON.stringify(bData, null, 4), "utf-8");
+                Object.assign(MEMORY_GROUPS_VAULT, bData);
+                return bData as unknown as T;
+              }
+            } catch {}
+          }
+        } else {
+          // Cache in memory vault
+          Object.assign(MEMORY_GROUPS_VAULT, parsed);
+        }
+      }
+
+      if (filePath.includes("clients_database.json")) {
+        if (!parsed || Object.keys(parsed).length === 0) {
+          if (Object.keys(MEMORY_CLIENTS_VAULT).length > 0) {
+            fs.writeFileSync(filePath, JSON.stringify(MEMORY_CLIENTS_VAULT, null, 4), "utf-8");
+            return { ...MEMORY_CLIENTS_VAULT } as unknown as T;
+          }
+          const vaultPath = path.join(process.cwd(), "backups", "clients_persistent_vault.json");
+          if (fs.existsSync(vaultPath)) {
+            try {
+              const vData = JSON.parse(fs.readFileSync(vaultPath, "utf-8"));
+              if (vData && Object.keys(vData).length > 0) {
+                fs.writeFileSync(filePath, JSON.stringify(vData, null, 4), "utf-8");
+                Object.assign(MEMORY_CLIENTS_VAULT, vData);
+                return vData as unknown as T;
+              }
+            } catch {}
+          }
+        } else {
+          Object.assign(MEMORY_CLIENTS_VAULT, parsed);
+        }
+      }
+
+      return parsed;
     }
   } catch (err) {
     console.error(`Error reading ${filePath}:`, err);
@@ -71,10 +144,206 @@ function readJsonFile<T>(filePath: string, fallback: T): T {
 function writeJsonFile(filePath: string, data: any) {
   try {
     fs.writeFileSync(filePath, JSON.stringify(data, null, 4), "utf-8");
+
+    // Persistent Vault & Snapshot mirroring
+    if (filePath.includes("groups_config.json")) {
+      Object.assign(MEMORY_GROUPS_VAULT, data);
+      const backupDir = path.join(process.cwd(), "backups");
+      if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(path.join(backupDir, "groups_persistent_vault.json"), JSON.stringify(data, null, 4), "utf-8");
+      fs.writeFileSync(path.join(backupDir, "groups_config.json.bak"), JSON.stringify(data, null, 4), "utf-8");
+    } else if (filePath.includes("clients_database.json")) {
+      Object.assign(MEMORY_CLIENTS_VAULT, data);
+      const backupDir = path.join(process.cwd(), "backups");
+      if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(path.join(backupDir, "clients_persistent_vault.json"), JSON.stringify(data, null, 4), "utf-8");
+      fs.writeFileSync(path.join(backupDir, "clients_database.json.bak"), JSON.stringify(data, null, 4), "utf-8");
+    }
   } catch (err) {
     console.error(`Error writing ${filePath}:`, err);
   }
 }
+
+// ----------------- GITHUB REST API ENGINE -----------------
+async function syncToGitHub(reason: string): Promise<{ success: boolean; message: string; details?: any }> {
+  const settings = readJsonFile(SETTINGS_FILE, DEFAULT_SETTINGS) as any;
+  const token = (settings.github_token || process.env.GITHUB_TOKEN || "").trim();
+  const repo = (settings.github_repo || process.env.GITHUB_REPO || "").trim();
+  const branch = (settings.github_branch || process.env.GITHUB_BRANCH || "main").trim();
+  const isEnabled = settings.github_sync_enabled !== false;
+
+  if (!isEnabled) {
+    return { success: false, message: "GitHub Auto-Sync ត្រូវបានបិទនៅក្នុង Settings" };
+  }
+  if (!token || !repo) {
+    return {
+      success: false,
+      message: "GitHub Token ឬ Repository (owner/repo) មិនទាន់បានកំណត់ឡើយ (សូមចូលទៅកាន់ Settings)"
+    };
+  }
+
+  const cleanRepo = repo.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "").trim();
+  const filesToSync = [
+    { name: "groups_config.json", file: GROUPS_FILE },
+    { name: "clients_database.json", file: CLIENTS_FILE }
+  ];
+
+  let syncedFilesCount = 0;
+  const errors: string[] = [];
+
+  for (const item of filesToSync) {
+    if (!fs.existsSync(item.file)) continue;
+    try {
+      const contentStr = fs.readFileSync(item.file, "utf-8");
+      const base64Content = Buffer.from(contentStr, "utf-8").toString("base64");
+
+      // 1. Get current SHA if file already exists
+      let sha: string | undefined;
+      const getRes = await fetch(`https://api.github.com/repos/${cleanRepo}/contents/${item.name}?ref=${branch}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "User-Agent": "TeleGuard-Security-Bot"
+        }
+      });
+      if (getRes.ok) {
+        const getData = await getRes.json();
+        sha = getData.sha;
+      }
+
+      // 2. Commit & Push to GitHub
+      const putRes = await fetch(`https://api.github.com/repos/${cleanRepo}/contents/${item.name}`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+          "User-Agent": "TeleGuard-Security-Bot"
+        },
+        body: JSON.stringify({
+          message: `🤖 [Auto-Sync Bot] Update ${item.name} (${reason})`,
+          content: base64Content,
+          branch: branch,
+          ...(sha ? { sha } : {})
+        })
+      });
+
+      if (putRes.ok) {
+        syncedFilesCount++;
+      } else {
+        const errText = await putRes.text();
+        errors.push(`${item.name}: ${errText}`);
+      }
+    } catch (e: any) {
+      errors.push(`${item.name}: ${e.message || String(e)}`);
+    }
+  }
+
+  const nowStr = new Date().toISOString().replace("T", " ").substring(0, 19);
+  if (syncedFilesCount > 0) {
+    settings.last_github_sync_time = nowStr;
+    settings.last_github_sync_status = "Success";
+    settings.last_github_sync_details = `Synced ${syncedFilesCount} files (${reason})`;
+    writeJsonFile(SETTINGS_FILE, settings);
+    return {
+      success: true,
+      message: `🎉 បាន Sync ${syncedFilesCount} ឯកសារទៅកាន់ GitHub (${cleanRepo}@${branch}) ដោយស្វ័យប្រវត្តិ! (${reason})`
+    };
+  } else {
+    settings.last_github_sync_time = nowStr;
+    settings.last_github_sync_status = "Error";
+    settings.last_github_sync_details = errors.join("; ");
+    writeJsonFile(SETTINGS_FILE, settings);
+    return {
+      success: false,
+      message: `⚠️ Sync មិនជោគជ័យ: ${errors.join("; ") || "Unknown GitHub error"}`
+    };
+  }
+}
+
+async function pullFromGitHub(): Promise<{ success: boolean; message: string; groupsCount: number; clientsCount: number }> {
+  const settings = readJsonFile(SETTINGS_FILE, DEFAULT_SETTINGS) as any;
+  const token = (settings.github_token || process.env.GITHUB_TOKEN || "").trim();
+  const repo = (settings.github_repo || process.env.GITHUB_REPO || "").trim();
+  const branch = (settings.github_branch || process.env.GITHUB_BRANCH || "main").trim();
+
+  if (!token || !repo) {
+    return {
+      success: false,
+      message: "GitHub Token ឬ Repository មិនទាន់បានកំណត់ឡើយ",
+      groupsCount: 0,
+      clientsCount: 0
+    };
+  }
+
+  const cleanRepo = repo.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "").trim();
+
+  try {
+    let pulledGroups = 0;
+    let pulledClients = 0;
+
+    // Pull groups_config.json
+    const resGroups = await fetch(`https://api.github.com/repos/${cleanRepo}/contents/groups_config.json?ref=${branch}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "TeleGuard-Security-Bot"
+      }
+    });
+
+    if (resGroups.ok) {
+      const dataG = await resGroups.json();
+      const content = Buffer.from(dataG.content, "base64").toString("utf-8");
+      const remoteGroups = JSON.parse(content);
+      const localGroups = readJsonFile<Record<string, any>>(GROUPS_FILE, {});
+      // Safe 2-Way Merge: Combine remote + local without losing any groups
+      const mergedGroups = { ...remoteGroups, ...localGroups };
+      writeJsonFile(GROUPS_FILE, mergedGroups);
+      pulledGroups = Object.keys(mergedGroups).length;
+    }
+
+    // Pull clients_database.json
+    const resClients = await fetch(`https://api.github.com/repos/${cleanRepo}/contents/clients_database.json?ref=${branch}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "TeleGuard-Security-Bot"
+      }
+    });
+
+    if (resClients.ok) {
+      const dataC = await resClients.json();
+      const content = Buffer.from(dataC.content, "base64").toString("utf-8");
+      const remoteClients = JSON.parse(content);
+      const localClients = readJsonFile<Record<string, any>>(CLIENTS_FILE, {});
+      const mergedClients = { ...remoteClients, ...localClients };
+      writeJsonFile(CLIENTS_FILE, mergedClients);
+      pulledClients = Object.keys(mergedClients).length;
+    }
+
+    const nowStr = new Date().toISOString().replace("T", " ").substring(0, 19);
+    settings.last_github_sync_time = nowStr;
+    settings.last_github_sync_status = "Success (Recalled)";
+    settings.last_github_sync_details = `Recalled ${pulledGroups} groups, ${pulledClients} clients from GitHub`;
+    writeJsonFile(SETTINGS_FILE, settings);
+
+    return {
+      success: true,
+      message: `📥 បានហៅទិន្នន័យពី GitHub មកវិញជោគជ័យ! (${pulledGroups} ក្រុម, ${pulledClients} អតិថិជន)`,
+      groupsCount: pulledGroups,
+      clientsCount: pulledClients
+    };
+  } catch (err: any) {
+    console.error("GitHub Pull Error:", err);
+    return {
+      success: false,
+      message: `❌ កំហុសពេលហៅទិន្នន័យពី GitHub: ${err.message || String(err)}`,
+      groupsCount: 0,
+      clientsCount: 0
+    };
+  }
+}
+
 
 // ----------------- API ROUTES -----------------
 app.get("/api/health", (_req, res) => {
@@ -287,6 +556,17 @@ app.post("/api/groups/sync-from-telegram", async (req, res) => {
 
   writeJsonFile(GROUPS_FILE, groups);
   writeJsonFile(CLIENTS_FILE, clients);
+
+  // If Auto-Admin-Refresh is enabled, automatically trigger fix-admin-rights logic on newly imported groups
+  if (settings.auto_admin_refresh_enabled !== false && newlyImported.length > 0) {
+    for (const item of newlyImported) {
+      try {
+        await executeFixAdminRights(item.id, "Auto-Admin-Refresh on New Group");
+      } catch (err) {
+        console.warn("Auto-Admin-Refresh on new group error:", err);
+      }
+    }
+  }
 
   res.json({
     success: true,
@@ -658,17 +938,80 @@ app.post("/api/groups/:id/action", (req, res) => {
   writeJsonFile(GROUPS_FILE, groups);
   writeJsonFile(CLIENTS_FILE, clients);
 
+  // Auto-sync to GitHub if configured
+  const currentBotSettings = readJsonFile(SETTINGS_FILE, DEFAULT_SETTINGS) as any;
+  if (currentBotSettings.github_auto_sync_on_new_group && currentBotSettings.github_sync_enabled) {
+    syncToGitHub(`Group Action: ${action} on ${id}`).catch(() => {});
+  }
+
   res.json({ success: true, group: groups[id], client: clients[id] });
 });
 
-// Endpoint to refresh the bot's permission cache and fix admin rights for a specific group
-app.post("/api/groups/:groupId/fix-admin-rights", async (req, res) => {
-  const params = req.params as Record<string, string>;
-  const groupId = String(params.groupId || params.id || "").trim();
-  if (!groupId) {
-    return res.status(400).json({ success: false, message: "Missing groupId parameter" });
+// ----------------- GITHUB REST API ENDPOINTS -----------------
+app.get("/api/github/status", (_req, res) => {
+  const settings = readJsonFile(SETTINGS_FILE, DEFAULT_SETTINGS) as any;
+  const groups = readJsonFile<Record<string, any>>(GROUPS_FILE, {});
+  const clients = readJsonFile<Record<string, any>>(CLIENTS_FILE, {});
+  const token = (settings.github_token || process.env.GITHUB_TOKEN || "").trim();
+  const repo = (settings.github_repo || process.env.GITHUB_REPO || "").trim();
+  const branch = (settings.github_branch || process.env.GITHUB_BRANCH || "main").trim();
+
+  res.json({
+    enabled: settings.github_sync_enabled !== false,
+    configured: Boolean(token && repo),
+    repo: repo || "Not Configured",
+    branch: branch,
+    hasToken: Boolean(token),
+    auto_sync_on_new_group: settings.github_auto_sync_on_new_group !== false,
+    last_sync_time: settings.last_github_sync_time || "Not Synced Yet",
+    last_sync_status: settings.last_github_sync_status || "Ready",
+    last_sync_details: settings.last_github_sync_details || "",
+    total_groups: Object.keys(groups).length,
+    total_clients: Object.keys(clients).length,
+    vault_status: "Active (Local Multi-Tier Memory Vault Protected)"
+  });
+});
+
+app.post("/api/github/sync", async (req, res) => {
+  const { action, reason } = req.body || {};
+  if (action === "pull") {
+    const result = await pullFromGitHub();
+    return res.json(result);
+  } else {
+    const result = await syncToGitHub(reason || "Dashboard Manual Sync");
+    return res.json(result);
+  }
+});
+
+app.post("/api/groups/recall-groups", async (_req, res) => {
+  const settings = readJsonFile(SETTINGS_FILE, DEFAULT_SETTINGS) as any;
+  let recalledSource = "Local Persistent Vault (ចងចាំក្នុងបតរហូត)";
+  let ghResult: any = null;
+
+  if (settings.github_token && settings.github_repo && settings.github_sync_enabled !== false) {
+    ghResult = await pullFromGitHub();
+    if (ghResult.success) {
+      recalledSource = `GitHub Repository (${settings.github_repo}@${settings.github_branch || "main"})`;
+    }
   }
 
+  const groups = readJsonFile<Record<string, any>>(GROUPS_FILE, {});
+  const clients = readJsonFile<Record<string, any>>(CLIENTS_FILE, {});
+
+  res.json({
+    success: true,
+    message: `✅ បានហៅបញ្ជីក្រុមមកវិញជោគជ័យ! ប្រភព៖ ${recalledSource}`,
+    total_groups: Object.keys(groups).length,
+    total_clients: Object.keys(clients).length,
+    groups,
+    clients,
+    github_result: ghResult
+  });
+});
+
+
+// Helper to execute fix-admin-rights and update permission cache
+async function executeFixAdminRights(groupId: string, triggerSource: string = "Manual") {
   const groups = readJsonFile<Record<string, any>>(GROUPS_FILE, {});
   const clients = readJsonFile<Record<string, any>>(CLIENTS_FILE, {});
   const settings = readJsonFile(SETTINGS_FILE, DEFAULT_SETTINGS);
@@ -863,8 +1206,8 @@ app.post("/api/groups/:groupId/fix-admin-rights", async (req, res) => {
     chat_id: String(groupId),
     chat_title: group.title,
     user_id: "240224709",
-    user_name: "Master Admin",
-    details: `🔄 Permission Cache Refreshed: Bot is Admin (${botIsAdmin ? "YES ✅" : "NO ⚠️"}), Status: ${adminStatus}, DeleteMsgs: ${adminRights.can_delete_messages ? "YES" : "NO"}, RestrictUsers: ${adminRights.can_restrict_members ? "YES" : "NO"}`,
+    user_name: triggerSource === "Auto-Admin-Refresh" ? "Auto-Admin-Refresh Engine" : "Master Admin",
+    details: `🔄 Permission Cache Refreshed [${triggerSource}]: Bot is Admin (${botIsAdmin ? "YES ✅" : "NO ⚠️"}), Status: ${adminStatus}, DeleteMsgs: ${adminRights.can_delete_messages ? "YES" : "NO"}, RestrictUsers: ${adminRights.can_restrict_members ? "YES" : "NO"}`,
     action: "🛡️ Updated Admin Permission Cache"
   };
   logs.unshift(newLog);
@@ -879,7 +1222,7 @@ app.post("/api/groups/:groupId/fix-admin-rights", async (req, res) => {
       : `⚠️ Bot ជា Admin លើក្រុម "${group.title}" ប៉ុន្តែមិនទាន់បើកសិទ្ធិ Delete Messages ឬ Restrict Members គ្រប់គ្រាន់ទេ។`
     : `⚠️ Bot មិនទាន់ត្រូវបាន Promote ជា Administrator ក្នុងក្រុម "${group.title}" នៅឡើយទេ។ សូម Promote Bot ជា Admin ក្នុង Telegram Group!`;
 
-  return res.json({
+  return {
     success: true,
     groupId,
     bot_is_admin: botIsAdmin,
@@ -890,7 +1233,54 @@ app.post("/api/groups/:groupId/fix-admin-rights", async (req, res) => {
     group: group,
     client: clients[groupId],
     message: statusMsg,
+    source: triggerSource,
     error_detail: errorDetail
+  };
+}
+
+// Endpoint to refresh the bot's permission cache and fix admin rights for a specific group
+app.post("/api/groups/:groupId/fix-admin-rights", async (req, res) => {
+  const params = req.params as Record<string, string>;
+  const groupId = String(params.groupId || params.id || "").trim();
+  if (!groupId) {
+    return res.status(400).json({ success: false, message: "Missing groupId parameter" });
+  }
+
+  try {
+    const result = await executeFixAdminRights(groupId, "Manual Dashboard Request");
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || "Failed to fix admin rights" });
+  }
+});
+
+// Endpoint to batch trigger Auto-Admin-Refresh on all registered groups
+app.post("/api/groups/auto-refresh-all-admin-rights", async (_req, res) => {
+  const groups = readJsonFile<Record<string, any>>(GROUPS_FILE, {});
+  const settings = readJsonFile(SETTINGS_FILE, DEFAULT_SETTINGS);
+  const groupIds = Object.keys(groups);
+  const results: any[] = [];
+  let refreshedCount = 0;
+  let fixedAdminCount = 0;
+
+  for (const gid of groupIds) {
+    try {
+      const resData = await executeFixAdminRights(gid, "Auto-Admin-Refresh");
+      results.push(resData);
+      refreshedCount++;
+      if (resData.bot_is_admin) fixedAdminCount++;
+    } catch (err: any) {
+      console.warn("Failed auto-refresh for group", gid, err);
+    }
+  }
+
+  res.json({
+    success: true,
+    total_groups: groupIds.length,
+    refreshed_count: refreshedCount,
+    admin_verified_count: fixedAdminCount,
+    auto_admin_refresh_enabled: settings.auto_admin_refresh_enabled !== false,
+    message: `🎉 បានដំណើរការ Auto-Admin-Refresh លើ ${refreshedCount} ក្រុម! បានផ្ទៀងផ្ទាត់សិទ្ធិ Admin ${fixedAdminCount} ក្រុម។`
   });
 });
 
@@ -1038,6 +1428,18 @@ app.post("/api/logs", (req, res) => {
   writeJsonFile(LOGS_FILE, logs);
   writeJsonFile(GROUPS_FILE, groups);
   writeJsonFile(CLIENTS_FILE, clients);
+
+  const settings = readJsonFile(SETTINGS_FILE, DEFAULT_SETTINGS);
+  if (
+    settings.auto_admin_refresh_enabled !== false &&
+    (newLog.event_type === "BOT_NOT_ADMIN" ||
+      newLog.details.toLowerCase().includes("not admin") ||
+      newLog.details.toLowerCase().includes("bot_not_admin"))
+  ) {
+    executeFixAdminRights(cKey, "Auto-Admin-Refresh on Error Detection").catch((e) =>
+      console.warn("Auto-admin refresh on log error:", e)
+    );
+  }
 
   res.json({ success: true, log: newLog });
 });

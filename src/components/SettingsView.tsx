@@ -30,7 +30,12 @@ import {
   Send,
   Terminal,
   ExternalLink,
-  Copy
+  Copy,
+  ShieldCheck,
+  GitBranch,
+  Eye,
+  EyeOff,
+  HardDrive
 } from "lucide-react";
 
 interface SettingsViewProps {
@@ -71,6 +76,135 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isSettingUpMenu, setIsSettingUpMenu] = useState(false);
   const [menuSetupStatus, setMenuSetupStatus] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [copiedCmds, setCopiedCmds] = useState(false);
+
+  // Auto-Admin-Refresh test states
+  const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
+  const [autoRefreshResult, setAutoRefreshResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+
+  // GitHub Auto-Sync & Group Recall states
+  const [showGithubToken, setShowGithubToken] = useState(false);
+  const [isSyncingGithub, setIsSyncingGithub] = useState(false);
+  const [githubSyncFeedback, setGithubSyncFeedback] = useState<{
+    success: boolean;
+    message: string;
+    details?: string;
+  } | null>(null);
+
+  const [isRecallingGroups, setIsRecallingGroups] = useState(false);
+  const [recallGroupsFeedback, setRecallGroupsFeedback] = useState<{
+    success: boolean;
+    message: string;
+    count?: number;
+  } | null>(null);
+
+  const handleSyncToGithubNow = async () => {
+    setIsSyncingGithub(true);
+    setGithubSyncFeedback(null);
+    try {
+      const res = await fetch("/api/github/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "push" })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setGithubSyncFeedback({
+          success: true,
+          message: data.message || "បានធ្វើសមកាលកម្ម (Auto-Sync) ទៅ GitHub ដោយជោគជ័យ!",
+          details: data.details
+        });
+        if (data.last_sync_time) {
+          setFormData((prev) => ({
+            ...prev,
+            last_github_sync_time: data.last_sync_time,
+            last_github_sync_status: "SUCCESS"
+          }));
+        }
+        if (onRefreshAllData) onRefreshAllData();
+        setTimeout(() => setGithubSyncFeedback(null), 8000);
+      } else {
+        setGithubSyncFeedback({
+          success: false,
+          message: data.message || "មិនអាចធ្វើសមកាលកម្មទៅ GitHub បានទេ",
+          details: data.details
+        });
+      }
+    } catch (err: any) {
+      setGithubSyncFeedback({
+        success: false,
+        message: err?.message || "បរាជ័យក្នុងការតភ្ជាប់ទៅ server"
+      });
+    } finally {
+      setIsSyncingGithub(false);
+    }
+  };
+
+  const handleRecallGroupsNow = async () => {
+    setIsRecallingGroups(true);
+    setRecallGroupsFeedback(null);
+    try {
+      const res = await fetch("/api/groups/recall-groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      const data = await res.json();
+      if (data.success) {
+        setRecallGroupsFeedback({
+          success: true,
+          message: data.message || `បានហៅបញ្ជីក្រុមមកវិញជោគជ័យ (${data.groups_count || 0} ក្រុម)!`,
+          count: data.groups_count
+        });
+        if (onRefreshAllData) onRefreshAllData();
+        setTimeout(() => setRecallGroupsFeedback(null), 8000);
+      } else {
+        setRecallGroupsFeedback({
+          success: false,
+          message: data.message || "មិនអាចហៅបញ្ជីក្រុមមកវិញបានទេ"
+        });
+      }
+    } catch (err: any) {
+      setRecallGroupsFeedback({
+        success: false,
+        message: err?.message || "បរាជ័យក្នុងការតភ្ជាប់ទៅ server"
+      });
+    } finally {
+      setIsRecallingGroups(false);
+    }
+  };
+
+  const handleTriggerAutoAdminRefreshNow = async () => {
+    setIsAutoRefreshing(true);
+    setAutoRefreshResult(null);
+    try {
+      const res = await fetch("/api/groups/auto-refresh-all-admin-rights", {
+        method: "POST"
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAutoRefreshResult({
+          success: true,
+          message: data.message || "បាន Refresh សិទ្ធិ Admin គ្រប់ក្រុមរួចរាល់!"
+        });
+        if (onRefreshAllData) onRefreshAllData();
+        setTimeout(() => setAutoRefreshResult(null), 7000);
+      } else {
+        setAutoRefreshResult({
+          success: false,
+          message: data.message || "មិនអាចដំណើរការ Auto-Refresh បានទេ"
+        });
+      }
+    } catch (err: any) {
+      setAutoRefreshResult({
+        success: false,
+        message: err?.message || "បរាជ័យក្នុងការតភ្ជាប់ទៅ server"
+      });
+    } finally {
+      setIsAutoRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     setFormData(settings);
@@ -768,6 +902,372 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Card 5: Enable Auto-Admin-Refresh */}
+          <div id="card_auto_admin_refresh" className="bg-white border border-[#e1e5eb] rounded-xl p-5 shadow-sm space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#e1e5eb]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg">
+                  <ShieldCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-[#1c2733] flex items-center gap-1.5">
+                    <span>ប្រព័ន្ធ Refresh សិទ្ធិ Admin ស្វ័យប្រវត្តិ (Auto-Admin-Refresh)</span>
+                  </h3>
+                  <p className="text-[11px] text-[#708499]">
+                    ដោះស្រាយ និងទប់ស្កាត់កំហុស &quot;Bot not admin&quot; ដោយស្វ័យប្រវត្តិតាមរយៈ /fix-admin-rights
+                  </p>
+                </div>
+              </div>
+              <span
+                className={`text-[10px] font-mono px-2 py-0.5 rounded font-semibold ${
+                  formData.auto_admin_refresh_enabled !== false
+                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                    : "bg-gray-100 text-gray-500 border border-gray-200"
+                }`}
+              >
+                {formData.auto_admin_refresh_enabled !== false ? "🟢 Auto-Refresh សកម្ម" : "⚪ Auto-Refresh បិទ"}
+              </span>
+            </div>
+
+            {/* Main Toggle for Enable Auto-Admin-Refresh */}
+            <div className="p-3.5 bg-[#f8fafc] border border-[#e1e5eb] rounded-lg flex items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <input
+                  id="auto_admin_refresh_checkbox"
+                  type="checkbox"
+                  checked={formData.auto_admin_refresh_enabled !== false}
+                  onChange={(e) => setFormData({ ...formData, auto_admin_refresh_enabled: e.target.checked })}
+                  className="w-4 h-4 mt-0.5 rounded text-[#2481cc] focus:ring-0 cursor-pointer accent-[#2481cc]"
+                />
+                <label htmlFor="auto_admin_refresh_checkbox" className="cursor-pointer select-none">
+                  <span className="text-xs font-bold text-[#1c2733] block">
+                    Enable Auto-Admin-Refresh
+                  </span>
+                  <span className="text-[11px] text-[#708499] block mt-0.5 leading-relaxed">
+                    Automatically triggers the /fix-admin-rights logic when the bot detects it is not an admin in a new group, preventing recurring &apos;bot not admin&apos; errors.
+                  </span>
+                  <span className="text-[10px] text-emerald-600 font-medium block mt-1">
+                    ដំណើរការ Logic /fix-admin-rights ដោយស្វ័យប្រវត្តិ នៅពេល Bot រកឃើញថាវាមិនទាន់ជា Admin ក្នុងក្រុមថ្មី ដោយការពារកុំឱ្យកើតមានកំហុស Bot not admin ដដែលៗ។
+                  </span>
+                </label>
+              </div>
+
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  id="enable_auto_admin_refresh_toggle"
+                  type="checkbox"
+                  checked={formData.auto_admin_refresh_enabled !== false}
+                  onChange={(e) => setFormData({ ...formData, auto_admin_refresh_enabled: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+              </label>
+            </div>
+
+            {/* Workflow breakdown steps */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+              <div className="p-2.5 bg-[#f8fafc] border border-[#e1e5eb] rounded-lg">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#1c2733] mb-1">
+                  <span className="w-4 h-4 rounded-full bg-blue-100 text-[#2481cc] flex items-center justify-center text-[10px]">1</span>
+                  <span>រកឃើញក្រុមថ្មី</span>
+                </div>
+                <p className="text-[10px] text-[#708499] leading-relaxed">
+                  នៅពេល Bot ត្រូវបាន Invite ឬ Added ចូលក្នុង Group ថ្មី ប្រព័ន្ធចាប់យកព្រឹត្តិការណ៍ភ្លាមៗ
+                </p>
+              </div>
+
+              <div className="p-2.5 bg-[#f8fafc] border border-[#e1e5eb] rounded-lg">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#1c2733] mb-1">
+                  <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-[10px]">2</span>
+                  <span>Trigger /fix-admin-rights</span>
+                </div>
+                <p className="text-[10px] text-[#708499] leading-relaxed">
+                  ទាញយក Status ពី Telegram API, ផ្ទៀងផ្ទាត់សិទ្ធិ Delete &amp; Restrict និង Refresh Permission Cache
+                </p>
+              </div>
+
+              <div className="p-2.5 bg-[#f8fafc] border border-[#e1e5eb] rounded-lg">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#1c2733] mb-1">
+                  <span className="w-4 h-4 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center text-[10px]">3</span>
+                  <span>ការពារ 100% ភ្លាមៗ</span>
+                </div>
+                <p className="text-[10px] text-[#708499] leading-relaxed">
+                  ទប់ស្កាត់កំហុស &apos;Bot not admin&apos; និងបើកប្រព័ន្ធការពារ Malware/Spam ភ្លាមៗដោយគ្មានការរំខាន
+                </p>
+              </div>
+            </div>
+
+            {/* Test & Manual Trigger Button */}
+            <div className="p-3 bg-[#f8fafc] rounded-lg border border-[#e1e5eb] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2">
+                <RefreshCw className={`w-4 h-4 text-[#2481cc] ${isAutoRefreshing ? "animate-spin" : ""}`} />
+                <span className="text-[11px] text-[#1c2733]">
+                  ចង់សាកល្បងដំណើរការ Auto-Admin-Refresh លើគ្រប់ក្រុមទាំងអស់ឥឡូវនេះ?
+                </span>
+              </div>
+
+              <button
+                id="btn_trigger_auto_admin_refresh_now"
+                type="button"
+                disabled={isAutoRefreshing}
+                onClick={handleTriggerAutoAdminRefreshNow}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors shrink-0 shadow-sm"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isAutoRefreshing ? "animate-spin" : ""}`} />
+                <span>
+                  {isAutoRefreshing ? "កំពុង Refresh សិទ្ធិគ្រប់ក្រុម..." : "⚡ ដំណើរការ /fix-admin-rights គ្រប់ក្រុម (Test Now)"}
+                </span>
+              </button>
+            </div>
+
+            {autoRefreshResult && (
+              <div
+                className={`p-2.5 rounded-lg text-xs flex items-center gap-2 font-medium border ${
+                  autoRefreshResult.success
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                    : "bg-rose-50 border-rose-200 text-rose-800"
+                }`}
+              >
+                {autoRefreshResult.success ? (
+                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span>{autoRefreshResult.message}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Card 6: ការចងចាំក្រុមអចិន្ត្រៃយ៍ & GitHub Auto-Sync (Never-Forget Vault) */}
+          <div id="card_never_forget_github_vault" className="bg-white border-2 border-[#2481cc]/20 rounded-xl p-5 shadow-sm space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#e1e5eb]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-1.5 bg-[#2481cc]/10 text-[#2481cc] rounded-lg">
+                  <GitBranch className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-[#1c2733] flex items-center gap-1.5">
+                    <span>ការចងចាំក្រុមអចិន្ត្រៃយ៍ & GitHub Auto-Sync (Never-Forget)</span>
+                  </h3>
+                  <p className="text-[11px] text-[#708499]">
+                    កុំឱ្យបតភ្លេចក្រុម ចងចាំក្នុងបតរហូត & Auto-Sync ទៅ GitHub ពេលមានក្រុមថ្មីចូល
+                  </p>
+                </div>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded">
+                Never-Forget Active
+              </span>
+            </div>
+
+            {/* Permanent Storage Notice Banner */}
+            <div className="p-3.5 bg-gradient-to-r from-emerald-50/90 to-teal-50/60 border border-emerald-200 rounded-xl space-y-1.5">
+              <div className="flex items-center gap-2 text-emerald-900 font-bold text-xs">
+                <HardDrive className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>ប្រព័ន្ធចងចាំក្នុងបតរហូតតែម្តង (Never-Forget Architecture)</span>
+              </div>
+              <p className="text-[11px] text-emerald-800 leading-relaxed">
+                ដោយមិនចាំបាច់តភ្ជាប់អ្វីបន្ថែមទៀត ក៏ Bot ចងចាំក្រុម និង CRM អតិថិជនរហូត មិនបាត់បង់ឡើយ តាមរយៈ <b>Multi-Tier Vault</b> (Active RAM + Local Disk Vault + GitHub Remote Mirror)។ នៅពេលបើកបញ្ជីអេតមីន ឬចាប់ផ្ដើមឡើងវិញ ប្រព័ន្ធនឹងហៅទិន្នន័យក្រុមមកវិញដោយស្វ័យប្រវត្តិ!
+              </p>
+            </div>
+
+            {/* Toggle 1: Auto-Sync to GitHub on New Group Joined */}
+            <div className="p-3.5 bg-[#f8fafc] border border-[#e1e5eb] rounded-lg flex items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <input
+                  id="github_auto_sync_on_new_group_checkbox"
+                  type="checkbox"
+                  checked={formData.github_auto_sync_on_new_group !== false}
+                  onChange={(e) => setFormData({ ...formData, github_auto_sync_on_new_group: e.target.checked })}
+                  className="w-4 h-4 mt-0.5 rounded text-[#2481cc] focus:ring-0 cursor-pointer accent-[#2481cc]"
+                />
+                <label htmlFor="github_auto_sync_on_new_group_checkbox" className="cursor-pointer select-none">
+                  <span className="text-xs font-bold text-[#1c2733] block">
+                    អូតូ Sync ទៅ GitHub ពេលមានក្រុមថ្មីចូល (Auto-Sync on New Group)
+                  </span>
+                  <span className="text-[11px] text-[#708499] block mt-0.5 leading-relaxed">
+                    ពេលមានគ្រុបថ្មី Add Bot ចូល ឬ Promoted ជា Admin ប្រព័ន្ធនឹងធ្វើ Auto-Commit & Sync ទិន្នន័យក្រុមទៅកាន់ GitHub ដោយស្វ័យប្រវត្តិភ្លាមៗ 100%។
+                  </span>
+                  <span className="text-[10px] text-emerald-600 font-medium block mt-1">
+                    ✓ ដំណើរការអូតូក្នុង Background ដោយមិនធ្វើឱ្យ Bot គាំងឡើយ
+                  </span>
+                </label>
+              </div>
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded border whitespace-nowrap shrink-0 ${
+                  formData.github_auto_sync_on_new_group !== false
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : "bg-gray-100 text-gray-500 border-gray-200"
+                }`}
+              >
+                {formData.github_auto_sync_on_new_group !== false ? "🟢 សកម្ម" : "⚪ បិទ"}
+              </span>
+            </div>
+
+            {/* Toggle 2: Enable GitHub Remote Sync */}
+            <div className="p-3.5 bg-[#f8fafc] border border-[#e1e5eb] rounded-lg flex items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <input
+                  id="github_sync_enabled_checkbox"
+                  type="checkbox"
+                  checked={formData.github_sync_enabled !== false}
+                  onChange={(e) => setFormData({ ...formData, github_sync_enabled: e.target.checked })}
+                  className="w-4 h-4 mt-0.5 rounded text-[#2481cc] focus:ring-0 cursor-pointer accent-[#2481cc]"
+                />
+                <label htmlFor="github_sync_enabled_checkbox" className="cursor-pointer select-none">
+                  <span className="text-xs font-bold text-[#1c2733] block">
+                    បើកដំណើរការ GitHub Remote Repository Sync
+                  </span>
+                  <span className="text-[11px] text-[#708499] block mt-0.5 leading-relaxed">
+                    ធ្វើសមកាលកម្មទិន្នន័យ groups_config.json និង clients_database.json ជាមួយ GitHub REST API v3។
+                  </span>
+                </label>
+              </div>
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded border whitespace-nowrap shrink-0 ${
+                  formData.github_sync_enabled !== false
+                    ? "bg-blue-50 text-blue-700 border-blue-200"
+                    : "bg-gray-100 text-gray-500 border-gray-200"
+                }`}
+              >
+                {formData.github_sync_enabled !== false ? "🟢 បានបើក" : "⚪ បានបិទ"}
+              </span>
+            </div>
+
+            {/* GitHub Credentials Configuration */}
+            <div className="space-y-3 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* GitHub Repo */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#1c2733] mb-1">
+                    GitHub Repository (owner/repo)
+                  </label>
+                  <input
+                    id="input_github_repo"
+                    type="text"
+                    value={formData.github_repo || ""}
+                    onChange={(e) => setFormData({ ...formData, github_repo: e.target.value })}
+                    placeholder="LimSorn/teleguard-bot-data"
+                    className="w-full bg-[#f8fafc] border border-[#e1e5eb] text-xs text-[#1c2733] px-3 py-2 rounded-lg focus:outline-none focus:border-[#2481cc] font-mono"
+                  />
+                </div>
+
+                {/* GitHub Branch */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#1c2733] mb-1">
+                    Branch Name
+                  </label>
+                  <input
+                    id="input_github_branch"
+                    type="text"
+                    value={formData.github_branch || "main"}
+                    onChange={(e) => setFormData({ ...formData, github_branch: e.target.value })}
+                    placeholder="main"
+                    className="w-full bg-[#f8fafc] border border-[#e1e5eb] text-xs text-[#1c2733] px-3 py-2 rounded-lg focus:outline-none focus:border-[#2481cc] font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* GitHub Token */}
+              <div>
+                <label className="block text-xs font-semibold text-[#1c2733] mb-1">
+                  GitHub Personal Access Token (Fine-grained ឬ Classic 'repo' scope)
+                </label>
+                <div className="relative">
+                  <input
+                    id="input_github_token"
+                    type={showGithubToken ? "text" : "password"}
+                    value={formData.github_token || ""}
+                    onChange={(e) => setFormData({ ...formData, github_token: e.target.value })}
+                    placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    className="w-full bg-[#f8fafc] border border-[#e1e5eb] text-xs text-[#1c2733] px-3 py-2 pr-10 rounded-lg focus:outline-none focus:border-[#2481cc] font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowGithubToken(!showGithubToken)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#708499] hover:text-[#1c2733] p-1"
+                    title={showGithubToken ? "លាក់ Token" : "បង្ហាញ Token"}
+                  >
+                    {showGithubToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-[#708499] mt-1">
+                  💡 Token ត្រូវបានរក្សាទុកក្នុង Local Container & Vault ដោយសុវត្ថិភាពខ្ពស់ មិនបញ្ចេញទៅខាងក្រៅឡើយ។
+                </p>
+              </div>
+            </div>
+
+            {/* Interactive Actions Grid */}
+            <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {/* Button 1: Recall Groups */}
+              <button
+                id="btn_recall_groups_settings"
+                type="button"
+                onClick={handleRecallGroupsNow}
+                disabled={isRecallingGroups}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRecallingGroups ? "animate-spin" : ""}`} />
+                <span>{isRecallingGroups ? "កំពុងហៅបញ្ជីក្រុម..." : "🔄 ហៅបញ្ជីក្រុមមកវិញ (Recall)"}</span>
+              </button>
+
+              {/* Button 2: Auto-Sync to GitHub Now */}
+              <button
+                id="btn_sync_github_now"
+                type="button"
+                onClick={handleSyncToGithubNow}
+                disabled={isSyncingGithub}
+                className="w-full bg-[#2481cc] hover:bg-[#1b64a0] disabled:opacity-60 text-white py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+              >
+                <GitBranch className={`w-3.5 h-3.5 ${isSyncingGithub ? "animate-spin" : ""}`} />
+                <span>{isSyncingGithub ? "កំពុង Sync ទៅ GitHub..." : "⚡ Auto-Sync ទៅ GitHub ឥឡូវនេះ"}</span>
+              </button>
+            </div>
+
+            {/* Sync Feedback Message */}
+            {githubSyncFeedback && (
+              <div
+                className={`p-2.5 rounded-lg text-xs flex items-center gap-2 font-medium border ${
+                  githubSyncFeedback.success
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                    : "bg-rose-50 border-rose-200 text-rose-800"
+                }`}
+              >
+                {githubSyncFeedback.success ? (
+                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span>{githubSyncFeedback.message}</span>
+              </div>
+            )}
+
+            {/* Recall Feedback Message */}
+            {recallGroupsFeedback && (
+              <div
+                className={`p-2.5 rounded-lg text-xs flex items-center gap-2 font-medium border ${
+                  recallGroupsFeedback.success
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                    : "bg-rose-50 border-rose-200 text-rose-800"
+                }`}
+              >
+                {recallGroupsFeedback.success ? (
+                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span>{recallGroupsFeedback.message}</span>
+              </div>
+            )}
+
+            {/* Last Sync Timestamp Info */}
+            {formData.last_github_sync_time && (
+              <div className="p-2 bg-[#f8fafc] border border-[#e1e5eb] rounded-lg flex items-center justify-between text-[11px] text-[#708499]">
+                <span>សមកាលកម្មចុងក្រោយ (Last Sync):</span>
+                <span className="font-mono font-semibold text-[#1c2733]">{formData.last_github_sync_time}</span>
+              </div>
+            )}
           </div>
         </div>
 

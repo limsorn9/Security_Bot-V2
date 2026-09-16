@@ -27,8 +27,8 @@
             "can_manage_chat": true,
             "can_change_info": true
         },
-        "last_admin_check": "2026-09-11 23:14:55",
-        "last_permission_refresh": "2026-09-11 23:14:55"
+        "last_admin_check": "2026-09-16 02:26:01",
+        "last_permission_refresh": "2026-09-16 02:26:01"
     },
     "-1001234960636": {
         "title": "គ្រូបង្រៀនជំនាន់ថ្មី",
@@ -44,7 +44,22 @@
         "added_by_id": 240224709,
         "added_by_name": "លីម សន 🇰🇭 ( LIM SORN )",
         "added_by_username": "@limsorn",
-        "threats_blocked_count": 0
+        "threats_blocked_count": 0,
+        "admin_ids": [
+            "240224709"
+        ],
+        "bot_is_admin": true,
+        "admin_status": "administrator",
+        "admin_rights": {
+            "can_delete_messages": true,
+            "can_restrict_members": true,
+            "can_pin_messages": true,
+            "can_invite_users": true,
+            "can_manage_chat": true,
+            "can_change_info": true
+        },
+        "last_admin_check": "2026-09-16 02:26:01",
+        "last_permission_refresh": "2026-09-16 02:26:01"
     },
     "-1004438418679": {
         "title": "អនុវិស័យមត្ដេយ្យ បឋមសិក្សា ស្រុកភ្នំព្រឹកការ",
@@ -60,7 +75,22 @@
         "added_by_id": 240224709,
         "added_by_name": "លីម សន 🇰🇭 ( LIM SORN )",
         "added_by_username": "@limsorn",
-        "threats_blocked_count": 0
+        "threats_blocked_count": 0,
+        "admin_ids": [
+            "240224709"
+        ],
+        "bot_is_admin": true,
+        "admin_status": "administrator",
+        "admin_rights": {
+            "can_delete_messages": true,
+            "can_restrict_members": true,
+            "can_pin_messages": true,
+            "can_invite_users": true,
+            "can_manage_chat": true,
+            "can_change_info": true
+        },
+        "last_admin_check": "2026-09-16 02:26:01",
+        "last_permission_refresh": "2026-09-16 02:26:01"
     },
     "-1002269705211": {
         "title": "GEIP(SCS76-AF72) បាត់ដំបង",
@@ -77,7 +107,22 @@
         "added_by_name": null,
         "added_by_username": "N/A",
         "threats_blocked_count": 0,
-        "last_admin_promo_reminder_ts": 1788076261.7700052
+        "last_admin_promo_reminder_ts": 1788076261.7700052,
+        "admin_ids": [
+            "240224709"
+        ],
+        "bot_is_admin": true,
+        "admin_status": "administrator",
+        "admin_rights": {
+            "can_delete_messages": true,
+            "can_restrict_members": true,
+            "can_pin_messages": true,
+            "can_invite_users": true,
+            "can_manage_chat": true,
+            "can_change_info": true
+        },
+        "last_admin_check": "2026-09-16 02:26:01",
+        "last_permission_refresh": "2026-09-16 02:26:01"
     },
     "-1001778284832": {
         "title": "ផ្នែកបឋមសិក្សា",
@@ -94,7 +139,22 @@
         "added_by_name": null,
         "added_by_username": "N/A",
         "threats_blocked_count": 0,
-        "last_admin_promo_reminder_ts": 1788076261.7700052
+        "last_admin_promo_reminder_ts": 1788076261.7700052,
+        "admin_ids": [
+            "240224709"
+        ],
+        "bot_is_admin": true,
+        "admin_status": "administrator",
+        "admin_rights": {
+            "can_delete_messages": true,
+            "can_restrict_members": true,
+            "can_pin_messages": true,
+            "can_invite_users": true,
+            "can_manage_chat": true,
+            "can_change_info": true
+        },
+        "last_admin_check": "2026-09-16 02:26:01",
+        "last_permission_refresh": "2026-09-16 02:26:01"
     },
     "-1004347724043": {
         "title": "ក្រុមកំចាត់មេរោគឌីជីថល",
@@ -110,14 +170,29 @@
         "added_by_id": 240224709,
         "added_by_name": "លីម សន 🇰🇭 ( LIM SORN )",
         "added_by_username": "@limsorn",
-        "threats_blocked_count": 0
+        "threats_blocked_count": 0,
+        "admin_ids": [
+            "240224709"
+        ],
+        "bot_is_admin": true,
+        "admin_status": "administrator",
+        "admin_rights": {
+            "can_delete_messages": true,
+            "can_restrict_members": true,
+            "can_pin_messages": true,
+            "can_invite_users": true,
+            "can_manage_chat": true,
+            "can_change_info": true
+        },
+        "last_admin_check": "2026-09-16 02:26:01",
+        "last_permission_refresh": "2026-09-16 02:26:01"
     },
     "-1002458931204": {
         "title": "VIP Business Community",
         "chat_id": -1002458931204,
         "added_at": "2026-09-11 22:22:22",
-        "is_authorized": false,
-        "is_enabled": false,
+        "is_authorized": true,
+        "is_enabled": true,
         "plan_type": "🎁 Pending Approval (រង់ចាំ Admin អនុញ្ញាត ៧ ថ្ងៃ)",
         "is_lifetime": false,
         "activated_date": "Not Yet Activated",
@@ -126,14 +201,29 @@
         "added_by_id": "240224709",
         "added_by_name": "Auto-Synced Group",
         "added_by_username": "@admin",
-        "threats_blocked_count": 0
+        "threats_blocked_count": 0,
+        "admin_ids": [
+            "240224709"
+        ],
+        "bot_is_admin": true,
+        "admin_status": "administrator",
+        "admin_rights": {
+            "can_delete_messages": true,
+            "can_restrict_members": true,
+            "can_pin_messages": true,
+            "can_invite_users": true,
+            "can_manage_chat": true,
+            "can_change_info": true
+        },
+        "last_admin_check": "2026-09-16 02:26:01",
+        "last_permission_refresh": "2026-09-16 02:26:01"
     },
     "-1002148729103": {
         "title": "Crypto & Forex Traders Hub",
         "chat_id": -1002148729103,
         "added_at": "2026-09-11 22:22:22",
-        "is_authorized": false,
-        "is_enabled": false,
+        "is_authorized": true,
+        "is_enabled": true,
         "plan_type": "🎁 Pending Approval (រង់ចាំ Admin អនុញ្ញាត ៧ ថ្ងៃ)",
         "is_lifetime": false,
         "activated_date": "Not Yet Activated",
@@ -142,14 +232,29 @@
         "added_by_id": "240224709",
         "added_by_name": "Auto-Synced Group",
         "added_by_username": "@admin",
-        "threats_blocked_count": 0
+        "threats_blocked_count": 0,
+        "admin_ids": [
+            "240224709"
+        ],
+        "bot_is_admin": true,
+        "admin_status": "administrator",
+        "admin_rights": {
+            "can_delete_messages": true,
+            "can_restrict_members": true,
+            "can_pin_messages": true,
+            "can_invite_users": true,
+            "can_manage_chat": true,
+            "can_change_info": true
+        },
+        "last_admin_check": "2026-09-16 02:26:01",
+        "last_permission_refresh": "2026-09-16 02:26:01"
     },
     "-1001984712039": {
         "title": "Digital Marketing & Sales Group",
         "chat_id": -1001984712039,
         "added_at": "2026-09-11 22:22:22",
-        "is_authorized": false,
-        "is_enabled": false,
+        "is_authorized": true,
+        "is_enabled": true,
         "plan_type": "🎁 Pending Approval (រង់ចាំ Admin អនុញ្ញាត ៧ ថ្ងៃ)",
         "is_lifetime": false,
         "activated_date": "Not Yet Activated",
@@ -158,6 +263,21 @@
         "added_by_id": "240224709",
         "added_by_name": "Auto-Synced Group",
         "added_by_username": "@admin",
-        "threats_blocked_count": 0
+        "threats_blocked_count": 0,
+        "admin_ids": [
+            "240224709"
+        ],
+        "bot_is_admin": true,
+        "admin_status": "administrator",
+        "admin_rights": {
+            "can_delete_messages": true,
+            "can_restrict_members": true,
+            "can_pin_messages": true,
+            "can_invite_users": true,
+            "can_manage_chat": true,
+            "can_change_info": true
+        },
+        "last_admin_check": "2026-09-16 02:26:01",
+        "last_permission_refresh": "2026-09-16 02:26:01"
     }
 }

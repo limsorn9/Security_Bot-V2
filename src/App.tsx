@@ -55,7 +55,8 @@ const DEFAULT_FALLBACK_SETTINGS: BotSettings = {
   super_admin_id: "240224709",
   channel_target: "@sornsecurityrobot",
   notifications_enabled: true,
-  cleanup_interval_days: 30
+  cleanup_interval_days: 30,
+  auto_admin_refresh_enabled: true
 };
 
 export default function App() {
@@ -159,6 +160,25 @@ export default function App() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  // 🔄 ពេលបើកបញ្ជីអេតមីន (Groups Manager) ឬ CRM វាហៅ list ក្រុមមកវិញដោយស្វ័យប្រវត្តិ (User Request)
+  useEffect(() => {
+    if (activeTab === "groups" || activeTab === "crm") {
+      fetch("/api/groups/recall-groups", { method: "POST" })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.groups && Object.keys(data.groups).length > 0) {
+            setGroups(data.groups);
+          }
+          if (data.clients && Object.keys(data.clients).length > 0) {
+            setClients(data.clients);
+          }
+        })
+        .catch(() => {
+          fetchData();
+        });
+    }
+  }, [activeTab]);
 
   // Sync Dark Mode with Document Element
   useEffect(() => {
@@ -294,6 +314,19 @@ export default function App() {
         });
         if (payload?.onComplete) {
           payload.onComplete(syncData);
+        }
+      } else if (action === "recall_groups") {
+        const res = await fetch("/api/groups/recall-groups", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+        const recallData = await res.json();
+        setToastMessage({
+          title: recallData.success ? "📥 ហៅបញ្ជីក្រុមជោគជ័យ (Recall)" : "⚠️ បរាជ័យក្នុងការហៅបញ្ជីក្រុម",
+          body: recallData.message || `បានទាញយក ${recallData.groups_count || 0} ក្រុមពី GitHub & Vault!`
+        });
+        if (payload?.onComplete) {
+          payload.onComplete(recallData);
         }
       } else if (action === "fix_admin_rights") {
         const res = await fetch(`/api/groups/${encodeURIComponent(groupId)}/fix-admin-rights`, {

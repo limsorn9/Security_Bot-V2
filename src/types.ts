@@ -94,6 +94,15 @@ export interface BotSettings {
   cleanup_interval_days: number; // 0 for never, 30 for 30 days, 60 for 60 days, 90 for 90 days
   auto_purge_enabled?: boolean;
   dark_mode?: boolean;
+  auto_admin_refresh_enabled?: boolean;
+  github_sync_enabled?: boolean;
+  github_token?: string;
+  github_repo?: string;
+  github_branch?: string;
+  github_auto_sync_on_new_group?: boolean;
+  last_github_sync_time?: string;
+  last_github_sync_status?: string;
+  last_github_sync_details?: string;
 }
 
 export interface ServiceHealthStatus {

@@ -41,7 +41,7 @@
         "expiry_date": "Lifetime",
         "plan_type": "👑 Lifetime VIP (ពេញមួយជីវិត)",
         "is_lifetime": true,
-        "license_status": "🟢 ACTIVE (បានទិញសិទ្ធិ)",
+        "license_status": "🟢 ACTIVE (បានបញ្ជាក់សិទ្ធិ Admin)",
         "customer_contact": {
             "name": "លីម សន 🇰🇭 ( LIM SORN )",
             "user_id": "240224709",
@@ -75,7 +75,7 @@
         "expiry_date": "Lifetime",
         "plan_type": "👑 Lifetime VIP (ពេញមួយជីវិត)",
         "is_lifetime": true,
-        "license_status": "🟢 ACTIVE (បានទិញសិទ្ធិ)",
+        "license_status": "🟢 ACTIVE (បានបញ្ជាក់សិទ្ធិ Admin)",
         "customer_contact": {
             "name": "លីម សន 🇰🇭 ( LIM SORN )",
             "user_id": "240224709",
@@ -109,7 +109,7 @@
         "expiry_date": "Lifetime",
         "plan_type": "👑 Lifetime VIP (ពេញមួយជីវិត)",
         "is_lifetime": true,
-        "license_status": "🟢 ACTIVE (បានទិញសិទ្ធិ)",
+        "license_status": "🟢 ACTIVE (បានបញ្ជាក់សិទ្ធិ Admin)",
         "customer_contact": {
             "name": "Group Admin",
             "user_id": "N/A",
@@ -143,7 +143,7 @@
         "expiry_date": "Lifetime",
         "plan_type": "👑 Lifetime VIP (ពេញមួយជីវិត)",
         "is_lifetime": true,
-        "license_status": "🟢 ACTIVE (បានទិញសិទ្ធិ)",
+        "license_status": "🟢 ACTIVE (បានបញ្ជាក់សិទ្ធិ Admin)",
         "customer_contact": {
             "name": "Group Admin",
             "user_id": "N/A",
@@ -177,7 +177,7 @@
         "expiry_date": "Lifetime",
         "plan_type": "👑 Lifetime VIP (ពេញមួយជីវិត)",
         "is_lifetime": true,
-        "license_status": "🟢 ACTIVE (បានទិញសិទ្ធិ)",
+        "license_status": "🟢 ACTIVE (បានបញ្ជាក់សិទ្ធិ Admin)",
         "customer_contact": {
             "name": "លីម សន 🇰🇭 ( LIM SORN )",
             "user_id": "240224709",
@@ -211,7 +211,7 @@
         "expiry_date": "Not Yet Activated",
         "plan_type": "🎁 Pending Approval (រង់ចាំ Admin អនុញ្ញាត ៧ ថ្ងៃ)",
         "is_lifetime": false,
-        "license_status": "🟡 PENDING APPROVAL (រង់ចាំ Admin អនុញ្ញាត ៧ ថ្ងៃ)",
+        "license_status": "🟢 ACTIVE (បានបញ្ជាក់សិទ្ធិ Admin)",
         "customer_contact": {
             "name": "Auto-Synced Group",
             "user_id": "240224709",
@@ -239,7 +239,7 @@
         "expiry_date": "Not Yet Activated",
         "plan_type": "🎁 Pending Approval (រង់ចាំ Admin អនុញ្ញាត ៧ ថ្ងៃ)",
         "is_lifetime": false,
-        "license_status": "🟡 PENDING APPROVAL (រង់ចាំ Admin អនុញ្ញាត ៧ ថ្ងៃ)",
+        "license_status": "🟢 ACTIVE (បានបញ្ជាក់សិទ្ធិ Admin)",
         "customer_contact": {
             "name": "Auto-Synced Group",
             "user_id": "240224709",
@@ -267,7 +267,7 @@
         "expiry_date": "Not Yet Activated",
         "plan_type": "🎁 Pending Approval (រង់ចាំ Admin អនុញ្ញាត ៧ ថ្ងៃ)",
         "is_lifetime": false,
-        "license_status": "🟡 PENDING APPROVAL (រង់ចាំ Admin អនុញ្ញាត ៧ ថ្ងៃ)",
+        "license_status": "🟢 ACTIVE (បានបញ្ជាក់សិទ្ធិ Admin)",
         "customer_contact": {
             "name": "Auto-Synced Group",
             "user_id": "240224709",

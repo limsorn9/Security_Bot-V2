@@ -85,6 +85,17 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
     permissions?: Record<string, boolean>;
   } | null>(null);
 
+  // Group Recall from GitHub / Persistent Vault
+  const [isRecalling, setIsRecalling] = useState(false);
+  const handleRecall = async () => {
+    setIsRecalling(true);
+    try {
+      await onGroupAction("recall", "recall_groups");
+    } finally {
+      setIsRecalling(false);
+    }
+  };
+
   const handleFixAdminStatus = async (groupId: string, title?: string) => {
     setFixingGroupId(groupId);
     try {
@@ -251,6 +262,19 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
               className="w-full bg-[#f8fafc] border border-[#e1e5eb] text-xs text-[#1c2733] pl-8 pr-3 py-1.5 rounded-lg focus:outline-none focus:border-[#2481cc]"
             />
           </div>
+
+          {/* Recall from GitHub / Persistent Vault Button */}
+          <button
+            type="button"
+            id="btn_recall_groups_groupmanager"
+            onClick={handleRecall}
+            disabled={isRecalling}
+            className="bg-sky-50 hover:bg-sky-100 text-[#2481cc] border border-sky-300 font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer shadow-sm disabled:opacity-60"
+            title="ហៅបញ្ជីក្រុមមកវិញពី GitHub Remote & Persistent Vault"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-[#2481cc] ${isRecalling ? "animate-spin" : ""}`} />
+            <span>{isRecalling ? "កំពុង Recall..." : "📥 ហៅក្រុម (Recall)"}</span>
+          </button>
 
           {/* Sync / Fetch from Telegram Button */}
           <button
@@ -488,6 +512,16 @@ export const GroupManager: React.FC<GroupManagerProps> = ({
                   </p>
                 </div>
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleRecall}
+                    disabled={isRecalling}
+                    className="w-full sm:w-auto bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-bold px-4 py-2 rounded-lg text-xs inline-flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRecalling ? "animate-spin" : ""}`} />
+                    <span>{isRecalling ? "កំពុង Recall..." : "📥 ហៅក្រុមពី GitHub / Vault (Recall)"}</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => {

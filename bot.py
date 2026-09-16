@@ -8,7 +8,16 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 from collections import defaultdict
-import requests
+import urllib.request
+import urllib.parse
+import urllib.error
+import base64
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -54,8 +63,19 @@ ANTI_FLOOD_ENABLED = os.getenv("ANTI_FLOOD_ENABLED", "true").lower() == "true"
 FLOOD_LIMIT = int(os.getenv("FLOOD_MAX_MSGS", "5"))
 FLOOD_WINDOW = int(os.getenv("FLOOD_WINDOW_SECONDS", "4"))
 
-GROUPS_FILE = "groups_config.json"
-CLIENTS_FILE = "clients_database.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+GROUPS_FILE = os.path.join(BASE_DIR, "groups_config.json")
+CLIENTS_FILE = os.path.join(BASE_DIR, "clients_database.json")
+SETTINGS_FILE = os.path.join(BASE_DIR, "bot_settings.json")
+BACKUPS_DIR = os.path.join(BASE_DIR, "backups")
+os.makedirs(BACKUPS_DIR, exist_ok=True)
+
+# 🔒 Multi-Tier Persistent Vault (ធានាកុំឱ្យបាត់ក្រុម ឬភ្លេចក្រុមជាដាច់ខាត)
+GROUPS_VAULT_FILE = os.path.join(BACKUPS_DIR, "groups_persistent_vault.json")
+CLIENTS_VAULT_FILE = os.path.join(BACKUPS_DIR, "clients_persistent_vault.json")
+IN_MEMORY_GROUPS_VAULT = {}
+IN_MEMORY_CLIENTS_VAULT = {}
+
 
 try:
     ADMIN_ID = int(ADMIN_ID_RAW)
@@ -150,7 +170,7 @@ def cloud_sync_on_startup():
         return
 
     try:
-        # A. MongoDB Sync
+        # A. MongoDB Sync (Safe 2-Way Merge)
         if mongo_db is not None:
             # Sync Groups
             col_groups = mongo_db["groups_config"]
@@ -162,68 +182,116 @@ def cloud_sync_on_startup():
                     remote_groups[str(gid)] = doc_copy
             
             local_groups = read_json(GROUPS_FILE, {})
-            if remote_groups:
-                # Cloud មានទិន្នន័យ -> Restore ចូល Local
-                local_groups.update(remote_groups)
-                with open(GROUPS_FILE, "w", encoding="utf-8") as f:
-                    json.dump(local_groups, f, ensure_ascii=False, indent=2)
-                logger.info(f"📥 [Auto-Restore] បានទាញយក {len(remote_groups)} ក្រុមពី MongoDB Atlas")
-            elif local_groups:
-                # Cloud នៅទំនេរ -> Push Local ឡើង Cloud
-                for gid, data in local_groups.items():
-                    col_groups.update_one({"_id": str(gid)}, {"$set": data}, upsert=True)
-                logger.info(f"📤 [Initial-Seed] បាន Upload {len(local_groups)} ក្រុមទៅកាន់ MongoDB Atlas")
+            # Safe 2-Way Merge: Combine remote + local without losing any groups
+            merged_groups = dict(local_groups)
+            for gid, r_data in remote_groups.items():
+                if gid not in merged_groups:
+                    merged_groups[gid] = r_data
+                else:
+                    # Merge attributes, preserving authorization & lifetime
+                    l_item = merged_groups[gid]
+                    merged_groups[gid] = {**r_data, **l_item}
+                    if r_data.get("is_authorized") or l_item.get("is_authorized"):
+                        merged_groups[gid]["is_authorized"] = True
+                    if r_data.get("is_lifetime") or l_item.get("is_lifetime"):
+                        merged_groups[gid]["is_lifetime"] = True
+                        merged_groups[gid]["expiry_date"] = "Lifetime"
 
-            # Sync Clients
+            if merged_groups != local_groups:
+                with open(GROUPS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(merged_groups, f, ensure_ascii=False, indent=2)
+
+            # Ensure any local-only groups are pushed to MongoDB
+            for gid, data in merged_groups.items():
+                if gid not in remote_groups:
+                    col_groups.update_one({"_id": str(gid)}, {"$set": data}, upsert=True)
+            logger.info(f"📥 [2-Way Sync] បាន Sync {len(merged_groups)} ក្រុមជាមួយ MongoDB Atlas រួចរាល់")
+
+            # Sync Clients (Safe 2-Way Merge)
             col_clients = mongo_db["clients_database"]
             remote_clients = {}
             for doc in col_clients.find({}):
-                cid = doc.get("_id") or doc.get("user_id")
+                cid = doc.get("_id") or doc.get("user_id") or doc.get("client_group_id")
                 if cid:
                     doc_copy = {k: v for k, v in doc.items() if k != "_id"}
                     remote_clients[str(cid)] = doc_copy
             
             local_clients = read_json(CLIENTS_FILE, {})
-            if remote_clients:
-                local_clients.update(remote_clients)
+            merged_clients = dict(local_clients)
+            for cid, r_data in remote_clients.items():
+                if cid not in merged_clients:
+                    merged_clients[cid] = r_data
+                else:
+                    merged_clients[cid] = {**r_data, **merged_clients[cid]}
+
+            if merged_clients != local_clients:
                 with open(CLIENTS_FILE, "w", encoding="utf-8") as f:
-                    json.dump(local_clients, f, ensure_ascii=False, indent=2)
-                logger.info(f"📥 [Auto-Restore] បានទាញយក {len(remote_clients)} អតិថិជនពី MongoDB Atlas")
-            elif local_clients:
-                for cid, data in local_clients.items():
+                    json.dump(merged_clients, f, ensure_ascii=False, indent=2)
+
+            for cid, data in merged_clients.items():
+                if cid not in remote_clients:
                     col_clients.update_one({"_id": str(cid)}, {"$set": data}, upsert=True)
 
             last_cloud_sync_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # B. PostgreSQL Sync
+        # B. PostgreSQL Sync (Safe 2-Way Merge)
         elif postgres_conn is not None:
             with postgres_conn.cursor() as cur:
                 cur.execute("SELECT key_name, data_json FROM bot_storage;")
                 rows = cur.fetchall()
                 data_map = {r[0]: r[1] for r in rows}
                 
-                if "groups_config" in data_map:
-                    g_data = json.loads(data_map["groups_config"])
-                    with open(GROUPS_FILE, "w", encoding="utf-8") as f:
-                        json.dump(g_data, f, ensure_ascii=False, indent=2)
-                    logger.info(f"📥 [Auto-Restore] បានទាញយក {len(g_data)} ក្រុមពី PostgreSQL")
-                elif os.path.exists(GROUPS_FILE):
-                    g_local = read_json(GROUPS_FILE, {})
-                    cur.execute(
-                        "INSERT INTO bot_storage (key_name, data_json, updated_at) VALUES (%s, %s, NOW()) ON CONFLICT (key_name) DO UPDATE SET data_json = EXCLUDED.data_json, updated_at = NOW();",
-                        ("groups_config", json.dumps(g_local, ensure_ascii=False))
-                    )
+                # 1. Groups Safe Merge
+                local_groups = read_json(GROUPS_FILE, {})
+                remote_groups = {}
+                if "groups_config" in data_map and data_map["groups_config"]:
+                    try:
+                        remote_groups = json.loads(data_map["groups_config"])
+                    except Exception:
+                        remote_groups = {}
 
-                if "clients_database" in data_map:
-                    c_data = json.loads(data_map["clients_database"])
-                    with open(CLIENTS_FILE, "w", encoding="utf-8") as f:
-                        json.dump(c_data, f, ensure_ascii=False, indent=2)
-                elif os.path.exists(CLIENTS_FILE):
-                    c_local = read_json(CLIENTS_FILE, {})
-                    cur.execute(
-                        "INSERT INTO bot_storage (key_name, data_json, updated_at) VALUES (%s, %s, NOW()) ON CONFLICT (key_name) DO UPDATE SET data_json = EXCLUDED.data_json, updated_at = NOW();",
-                        ("clients_database", json.dumps(c_local, ensure_ascii=False))
-                    )
+                merged_groups = dict(local_groups)
+                for gid, r_data in remote_groups.items():
+                    if gid not in merged_groups:
+                        merged_groups[gid] = r_data
+                    else:
+                        merged_groups[gid] = {**r_data, **merged_groups[gid]}
+                        if r_data.get("is_authorized") or merged_groups[gid].get("is_authorized"):
+                            merged_groups[gid]["is_authorized"] = True
+
+                with open(GROUPS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(merged_groups, f, ensure_ascii=False, indent=2)
+
+                # Push merged back to PostgreSQL so Cloud always has full dataset
+                cur.execute(
+                    "INSERT INTO bot_storage (key_name, data_json, updated_at) VALUES (%s, %s, NOW()) ON CONFLICT (key_name) DO UPDATE SET data_json = EXCLUDED.data_json, updated_at = NOW();",
+                    ("groups_config", json.dumps(merged_groups, ensure_ascii=False))
+                )
+                logger.info(f"📥 [2-Way Sync] បាន Sync {len(merged_groups)} ក្រុមជាមួយ PostgreSQL")
+
+                # 2. Clients Safe Merge
+                local_clients = read_json(CLIENTS_FILE, {})
+                remote_clients = {}
+                if "clients_database" in data_map and data_map["clients_database"]:
+                    try:
+                        remote_clients = json.loads(data_map["clients_database"])
+                    except Exception:
+                        remote_clients = {}
+
+                merged_clients = dict(local_clients)
+                for cid, r_data in remote_clients.items():
+                    if cid not in merged_clients:
+                        merged_clients[cid] = r_data
+                    else:
+                        merged_clients[cid] = {**r_data, **merged_clients[cid]}
+
+                with open(CLIENTS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(merged_clients, f, ensure_ascii=False, indent=2)
+
+                cur.execute(
+                    "INSERT INTO bot_storage (key_name, data_json, updated_at) VALUES (%s, %s, NOW()) ON CONFLICT (key_name) DO UPDATE SET data_json = EXCLUDED.data_json, updated_at = NOW();",
+                    ("clients_database", json.dumps(merged_clients, ensure_ascii=False))
+                )
             last_cloud_sync_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     except Exception as e:
@@ -258,29 +326,98 @@ def cloud_save_data(file_path: str, data):
     except Exception as e:
         logger.warning(f"⚠️ មិនអាច Save ទៅ Cloud Database បានភ្លាមៗ: {e}")
 
-# ----------------- LOCAL FILE DATABASE HELPERS -----------------
+# ----------------- LOCAL FILE DATABASE HELPERS & PERSISTENT VAULT -----------------
 def read_json(file_path: str, default=None):
+    global IN_MEMORY_GROUPS_VAULT, IN_MEMORY_CLIENTS_VAULT
     if default is None:
         default = {}
-    if not os.path.exists(file_path):
-        return default
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning(f"Error reading {file_path}: {e}")
-        return default
+    
+    data = None
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.warning(f"Error reading {file_path}: {e}")
+
+    # 🔒 Auto-Recall & Never-Forget Engine for Groups
+    if file_path == GROUPS_FILE:
+        if not data or not isinstance(data, dict) or len(data) == 0:
+            # 1. Check in-memory vault
+            if IN_MEMORY_GROUPS_VAULT:
+                try:
+                    with open(file_path, "w", encoding="utf-8") as wf:
+                        json.dump(IN_MEMORY_GROUPS_VAULT, wf, ensure_ascii=False, indent=2)
+                    return dict(IN_MEMORY_GROUPS_VAULT)
+                except Exception:
+                    pass
+            # 2. Check persistent disk vault
+            if os.path.exists(GROUPS_VAULT_FILE):
+                try:
+                    with open(GROUPS_VAULT_FILE, "r", encoding="utf-8") as vf:
+                        v_data = json.load(vf)
+                    if v_data and isinstance(v_data, dict) and len(v_data) > 0:
+                        IN_MEMORY_GROUPS_VAULT.update(v_data)
+                        with open(file_path, "w", encoding="utf-8") as wf:
+                            json.dump(v_data, wf, ensure_ascii=False, indent=2)
+                        return v_data
+                except Exception:
+                    pass
+            # 3. Check rolling snapshot backup
+            bak_file = os.path.join(BACKUPS_DIR, "groups_config.json.bak")
+            if os.path.exists(bak_file):
+                try:
+                    with open(bak_file, "r", encoding="utf-8") as bf:
+                        b_data = json.load(bf)
+                    if b_data and isinstance(b_data, dict) and len(b_data) > 0:
+                        IN_MEMORY_GROUPS_VAULT.update(b_data)
+                        with open(file_path, "w", encoding="utf-8") as wf:
+                            json.dump(b_data, wf, ensure_ascii=False, indent=2)
+                        return b_data
+                except Exception:
+                    pass
+        elif isinstance(data, dict):
+            IN_MEMORY_GROUPS_VAULT.update(data)
+
+    elif file_path == CLIENTS_FILE:
+        if not data or not isinstance(data, dict) or len(data) == 0:
+            if IN_MEMORY_CLIENTS_VAULT:
+                try:
+                    with open(file_path, "w", encoding="utf-8") as wf:
+                        json.dump(IN_MEMORY_CLIENTS_VAULT, wf, ensure_ascii=False, indent=2)
+                    return dict(IN_MEMORY_CLIENTS_VAULT)
+                except Exception:
+                    pass
+            if os.path.exists(CLIENTS_VAULT_FILE):
+                try:
+                    with open(CLIENTS_VAULT_FILE, "r", encoding="utf-8") as vf:
+                        v_data = json.load(vf)
+                    if v_data and isinstance(v_data, dict) and len(v_data) > 0:
+                        IN_MEMORY_CLIENTS_VAULT.update(v_data)
+                        with open(file_path, "w", encoding="utf-8") as wf:
+                            json.dump(v_data, wf, ensure_ascii=False, indent=2)
+                        return v_data
+                except Exception:
+                    pass
+        elif isinstance(data, dict):
+            IN_MEMORY_CLIENTS_VAULT.update(data)
+
+    return data if data is not None else default
 
 def write_json(file_path: str, data):
+    global IN_MEMORY_GROUPS_VAULT, IN_MEMORY_CLIENTS_VAULT
     try:
-        # Create automatic local timestamped snapshot / backup before overwrite
+        if file_path == GROUPS_FILE and isinstance(data, dict):
+            IN_MEMORY_GROUPS_VAULT.update(data)
+        elif file_path == CLIENTS_FILE and isinstance(data, dict):
+            IN_MEMORY_CLIENTS_VAULT.update(data)
+
+        # Create rolling snapshot
         if os.path.exists(file_path) and os.path.getsize(file_path) > 10:
             try:
                 base_dir = os.path.dirname(file_path) or "."
                 backup_dir = os.path.join(base_dir, "backups")
                 os.makedirs(backup_dir, exist_ok=True)
-                
-                # Create rolling snapshot
                 fname = os.path.basename(file_path)
                 bak_file = os.path.join(backup_dir, f"{fname}.bak")
                 with open(file_path, "r", encoding="utf-8") as rf:
@@ -292,10 +429,195 @@ def write_json(file_path: str, data):
 
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+
+        # Mirror to persistent vault
+        if file_path == GROUPS_FILE:
+            try:
+                with open(GROUPS_VAULT_FILE, "w", encoding="utf-8") as vf:
+                    json.dump(data, vf, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        elif file_path == CLIENTS_FILE:
+            try:
+                with open(CLIENTS_VAULT_FILE, "w", encoding="utf-8") as vf:
+                    json.dump(data, vf, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
         # រក្សាទុកឡើង Cloud Database ដោយស្វ័យប្រវត្តិ
         cloud_save_data(file_path, data)
     except Exception as e:
         logger.warning(f"Error writing {file_path}: {e}")
+
+# ----------------- GITHUB AUTO-SYNC & ZERO-CONFIG RECALL ENGINE -----------------
+def get_github_credentials():
+    settings = {}
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as sf:
+                settings = json.load(sf)
+        except Exception:
+            pass
+    token = (os.getenv("GITHUB_TOKEN") or settings.get("github_token") or "").strip()
+    repo = (os.getenv("GITHUB_REPO") or settings.get("github_repo") or "").strip()
+    branch = (os.getenv("GITHUB_BRANCH") or settings.get("github_branch") or "main").strip()
+    enabled = settings.get("github_sync_enabled", True)
+    clean_repo = repo.replace("https://github.com/", "").replace("http://github.com/", "").rstrip("/").replace(".git", "").strip()
+    return token, clean_repo, branch, enabled
+
+def sync_to_github_python(trigger_reason: str = "Auto-Sync"):
+    """Auto-sync groups & clients to GitHub repository using GitHub REST API v3 (Zero-Config)"""
+    token, repo, branch, enabled = get_github_credentials()
+    if not enabled or not token or not repo:
+        return False
+
+    files_to_sync = [
+        ("groups_config.json", GROUPS_FILE),
+        ("clients_database.json", CLIENTS_FILE)
+    ]
+
+    synced_count = 0
+    for file_name, local_path in files_to_sync:
+        if not os.path.exists(local_path):
+            continue
+        try:
+            with open(local_path, "r", encoding="utf-8") as lf:
+                content_str = lf.read()
+            b64_content = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+
+            # 1. Query file SHA if existing
+            sha = None
+            url_get = f"https://api.github.com/repos/{repo}/contents/{file_name}?ref={branch}"
+            req_get = urllib.request.Request(
+                url_get,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "TeleGuard-Security-Bot"
+                }
+            )
+            try:
+                with urllib.request.urlopen(req_get, timeout=8) as response:
+                    res_data = json.loads(response.read().decode("utf-8"))
+                    sha = res_data.get("sha")
+            except Exception:
+                pass
+
+            # 2. Put file to GitHub
+            url_put = f"https://api.github.com/repos/{repo}/contents/{file_name}"
+            payload = {
+                "message": f"🤖 [Auto-Sync Bot] {file_name} ({trigger_reason})",
+                "content": b64_content,
+                "branch": branch
+            }
+            if sha:
+                payload["sha"] = sha
+
+            req_put = urllib.request.Request(
+                url_put,
+                data=json.dumps(payload).encode("utf-8"),
+                method="PUT",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "Content-Type": "application/json",
+                    "User-Agent": "TeleGuard-Security-Bot"
+                }
+            )
+            with urllib.request.urlopen(req_put, timeout=10) as response:
+                synced_count += 1
+        except Exception as e:
+            logger.warning(f"⚠️ GitHub Sync note for {file_name}: {e}")
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if synced_count > 0:
+        logger.info(f"🚀 [GitHub Auto-Sync] Synced {synced_count} files to {repo}@{branch} ({trigger_reason})")
+        # Update settings timestamp
+        try:
+            settings = read_json(SETTINGS_FILE, {})
+            settings["last_github_sync_time"] = now_str
+            settings["last_github_sync_status"] = "Success"
+            settings["last_github_sync_details"] = f"Synced {synced_count} files ({trigger_reason})"
+            write_json(SETTINGS_FILE, settings)
+        except Exception:
+            pass
+        return True
+    return False
+
+def pull_from_github_python() -> dict:
+    """Pull groups_config.json from GitHub and perform safe 2-way merge"""
+    token, repo, branch, enabled = get_github_credentials()
+    if not token or not repo:
+        return {}
+    try:
+        url_get = f"https://api.github.com/repos/{repo}/contents/groups_config.json?ref={branch}"
+        req_get = urllib.request.Request(
+            url_get,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "TeleGuard-Security-Bot"
+            }
+        )
+        with urllib.request.urlopen(req_get, timeout=8) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            b64_content = res_data.get("content", "")
+            raw_json = base64.b64decode(b64_content).decode("utf-8")
+            remote_groups = json.loads(raw_json)
+            if isinstance(remote_groups, dict) and remote_groups:
+                local_groups = {}
+                if os.path.exists(GROUPS_FILE):
+                    try:
+                        with open(GROUPS_FILE, "r", encoding="utf-8") as f:
+                            local_groups = json.load(f)
+                    except Exception:
+                        local_groups = {}
+                # Safe 2-Way Merge
+                merged = {**remote_groups, **local_groups}
+                write_json(GROUPS_FILE, merged)
+                logger.info(f"📥 [GitHub Recall] Recalled {len(merged)} groups from {repo}@{branch}!")
+                return merged
+    except Exception as e:
+        logger.warning(f"⚠️ GitHub Pull note: {e}")
+    return {}
+
+def recall_groups_storage() -> dict:
+    """ហៅបញ្ជីក្រុមមកវិញទាំងស្រុងពី GitHub, Memory Vault និង Persistent Files (Never Forget Groups)"""
+    # 1. Read existing local/memory groups
+    groups = read_json(GROUPS_FILE, {})
+
+    # 2. If GitHub is configured, pull to get fresh remote updates
+    token, repo, branch, enabled = get_github_credentials()
+    if token and repo and enabled:
+        try:
+            gh_groups = pull_from_github_python()
+            if gh_groups:
+                groups = gh_groups
+        except Exception as ge:
+            logger.debug(f"GitHub recall note: {ge}")
+
+    # 3. If groups is still empty, check Persistent Vault and Backups
+    if not groups:
+        if os.path.exists(GROUPS_VAULT_FILE):
+            try:
+                with open(GROUPS_VAULT_FILE, "r", encoding="utf-8") as f:
+                    v_groups = json.load(f)
+                if isinstance(v_groups, dict) and v_groups:
+                    groups = v_groups
+                    write_json(GROUPS_FILE, groups)
+            except Exception:
+                pass
+
+    # 4. Check Cloud Database (MongoDB / PostgreSQL)
+    if not groups and cloud_db_connected:
+        try:
+            cloud_sync_on_startup()
+            groups = read_json(GROUPS_FILE, {})
+        except Exception:
+            pass
+
+    return groups
+
 
 # ----------------- INLINE KEYBOARD BUTTON BUILDERS -----------------
 def get_main_menu_keyboard(bot_username: str = ""):
@@ -395,6 +717,10 @@ def get_groups_interactive_keyboard():
             keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"adm_check_{cid}")])
 
     keyboard.append([
+        InlineKeyboardButton("🔄 ហៅក្រុមពី GitHub (Recall)", callback_data="adm_recall_github"),
+        InlineKeyboardButton("⚡ Sync ទៅ GitHub", callback_data="adm_sync_github"),
+    ])
+    keyboard.append([
         InlineKeyboardButton("👤 បញ្ជីអតិថិជន (CRM)", callback_data="adm_list_clients"),
         InlineKeyboardButton("🔄 Refresh បញ្ជី", callback_data="adm_list_groups"),
     ])
@@ -420,9 +746,13 @@ def sync_threat_log_to_dashboard(event_type: str, chat_id: str, chat_title: str,
             "details": details,
             "action": action
         }
-        resp = requests.post(url, json=payload, timeout=4)
-        if resp.status_code == 200:
-            logger.info(f"✅ បាន Auto-Sync កំណត់ត្រា {event_type} ទៅ Web Dashboard រួចរាល់!")
+        if requests is not None:
+            requests.post(url, json=payload, timeout=4)
+        else:
+            req_data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=4) as _:
+                pass
     except Exception as e:
         logger.debug(f"Dashboard sync skipped or offline: {e}")
 
@@ -486,6 +816,13 @@ def auto_register_group(chat_id: str, title: str, added_by_name: str, added_by_u
         write_json(CLIENTS_FILE, clients)
         logger.info(f"💾 បានកត់ត្រាក្រុមថ្មី {title} (ID: {cid_str}) និងបើក Free Trial 7 ថ្ងៃដោយស្វ័យប្រវត្តិ!")
 
+        # 🚀 Auto-sync ទៅ GitHub ភ្លាមៗពេលមានក្រុមថ្មីចូល!
+        threading.Thread(
+            target=sync_to_github_python,
+            args=(f"New Group Joined: {title} ({cid_str})",),
+            daemon=True
+        ).start()
+
     # 2. Sync to Web Dashboard REST API
     try:
         url = f"{DASHBOARD_API_URL.rstrip('/')}/api/groups/{cid_str}/action"
@@ -496,7 +833,13 @@ def auto_register_group(chat_id: str, title: str, added_by_name: str, added_by_u
             "addedByUsername": added_by_username,
             "addedById": added_by_id
         }
-        requests.post(url, json=payload, timeout=4)
+        if requests is not None:
+            requests.post(url, json=payload, timeout=4)
+        else:
+            req_data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=4) as _:
+                pass
     except Exception as e:
         logger.debug(f"Group sync skipped: {e}")
 
@@ -1332,7 +1675,8 @@ async def admin_panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not user or not is_admin(user.id):
         return await send_clean_bot_response(update, context, "⛔ លោកអ្នកគ្មានសិទ្ធិប្រើ Command នេះឡើយ!", delete_seconds=10)
 
-    groups = read_json(GROUPS_FILE, {})
+    # 🔄 ហៅបញ្ជីក្រុមមកវិញដោយស្វ័យប្រវត្តិ (Recall Groups from GitHub / Vault)
+    groups = recall_groups_storage()
     total_grps = len(groups)
     active_grps = sum(1 for g in groups.values() if g.get("is_authorized") and g.get("is_enabled"))
 
@@ -1341,30 +1685,58 @@ async def admin_panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"👥 <b>ក្រុមសរុបក្នុងប្រព័ន្ធ:</b> {total_grps} ក្រុម\n"
         f"🟢 <b>ក្រុមសកម្ម (Active):</b> {active_grps} ក្រុម\n"
-        f"🟡 <b>ក្រុមរង់ចាំ/ផុតកំណត់:</b> {total_grps - active_grps} ក្រុម\n\n"
+        f"🟡 <b>ក្រុមរង់ចាំ/ផុតកំណត់:</b> {total_grps - active_grps} ក្រុម\n"
+        "💾 <b>ការចងចាំក្រុម:</b> 🟢 Local Vault + GitHub Auto-Sync (Never Forget)\n\n"
         "👇 <b>សូមចុចលើប៊ូតុងឈ្មោះក្រុមខាងក្រោម ដើម្បី៖</b>\n"
         "• 🔍 ពិនិត្យ Profile និងប្រវត្តិនៃការប្រើប្រាស់\n"
         "• ⏳ កំណត់រយៈពេល (Trial 7D, +30D, +90D, Lifetime)\n"
         "• 🛡️ កំណត់សិទ្ធិ (Active, Pause, Revoke)\n"
         "━━━━━━━━━━━━━━━━━━━━"
     )
-    await send_clean_bot_response(update, context, text, reply_markup=get_groups_interactive_keyboard(), delete_seconds=120)
+    await send_clean_bot_response(update, context, text, reply_markup=get_groups_interactive_keyboard(), delete_seconds=180)
 
 async def groups_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or not is_admin(user.id):
         return await send_clean_bot_response(update, context, "⛔ លោកអ្នកគ្មានសិទ្ធិ!", delete_seconds=10)
 
-    groups = read_json(GROUPS_FILE, {})
+    # 🔄 ហៅបញ្ជីក្រុមមកវិញដោយស្វ័យប្រវត្តិពេលបើកបញ្ជីអេតមីន (User Request)
+    groups = recall_groups_storage()
     if not groups:
-        return await send_clean_bot_response(update, context, "📋 មិនទាន់មានក្រុមណាមួយក្នុងបញ្ជីឡើយ!", delete_seconds=15)
+        empty_text = (
+            "📋 <b>បញ្ជីគ្រប់គ្រងក្រុម (Admin Group Manager)</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ <i>មិនទាន់មានក្រុមណាមួយនៅក្នុងអង្គចងចាំបច្ចុប្បន្នឡើយ។</i>\n\n"
+            "💡 <b>ដំណោះស្រាយ៖</b>\n"
+            "• ចុចប៊ូតុង <b>«🔄 ហៅក្រុមពី GitHub (Recall)»</b> ដើម្បីទាញយកទិន្នន័យពី GitHub Repository\n"
+            "• ឬ Add Bot ចូលទៅក្នុងគ្រុប Telegram របស់អ្នក ដើម្បីឱ្យ Bot ចងចាំដោយស្វ័យប្រវត្តិ!"
+        )
+        empty_keyboard = [
+            [InlineKeyboardButton("🔄 ហៅក្រុមពី GitHub (Recall)", callback_data="adm_recall_github")],
+            [InlineKeyboardButton("⚡ Auto-Sync ទៅ GitHub", callback_data="adm_sync_github")],
+            [InlineKeyboardButton("❌ បិទសារ", callback_data="btn_close")]
+        ]
+        return await send_clean_bot_response(update, context, empty_text, reply_markup=InlineKeyboardMarkup(empty_keyboard), delete_seconds=60)
 
-    text = (
-        f"📋 <b>បញ្ជីឈ្មោះអតិថិជន & ក្រុមទាំងអស់ ({len(groups)} ក្រុម):</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "👇 <i>សូមចុចលើប៊ូតុងឈ្មោះក្រុម ដើម្បីមើលប្រវត្តិ រយៈពេលប្រើ និងកំណត់សិទ្ធិ៖</i>"
-    )
-    await send_clean_bot_response(update, context, text, reply_markup=get_groups_interactive_keyboard(), delete_seconds=120)
+    # បង្កើតបញ្ជីឈ្មោះក្រុមលម្អិត បង្ហាញជូន Master Admin ភ្លាមៗ
+    lines = [
+        f"📋 <b>បញ្ជីឈ្មោះអតិថិជន & ក្រុមទាំងអស់ ({len(groups)} ក្រុម):</b>",
+        "━━━━━━━━━━━━━━━━━━━━"
+    ]
+    for idx, (cid, g) in enumerate(groups.items(), 1):
+        title = g.get("title", f"Group {cid}")
+        is_auth = g.get("is_authorized", False)
+        is_en = g.get("is_enabled", False)
+        is_life = g.get("is_lifetime", False)
+        exp = "👑 Lifetime" if is_life else g.get("expiry_date", "N/A")
+        bot_adm = "🟢 ជា Admin" if g.get("bot_is_admin") else "⚠️ មិនទាន់ជា Admin"
+        status = "🟢 ដំណើរការ" if (is_auth and is_en) else ("🟡 ផ្អាក" if is_auth else "🔴 អត់ទាន់ Approve")
+        lines.append(f"<b>{idx}. 👥 {title}</b>\n   🆔 <code>{cid}</code> | 🛡️ {status}\n   👑 Bot: {bot_adm} | ⏳ ផុតកំណត់: {exp}")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append("👇 <i>ចុចលើប៊ូតុងឈ្មោះក្រុមខាងក្រោម ដើម្បីពិនិត្យ ឬកំណត់សិទ្ធិ៖</i>")
+    text = "\n".join(lines)
+    await send_clean_bot_response(update, context, text, reply_markup=get_groups_interactive_keyboard(), delete_seconds=180)
 
 async def clients_list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command /clients & /crm សម្រាប់ Master Admin មើលបញ្ជីអតិថិជន និងក្រុមដែលគាត់គ្រប់គ្រង"""
@@ -1931,21 +2303,25 @@ async def restore_database_command(update: Update, context: ContextTypes.DEFAULT
 
         # 2. Fallback to local snapshot backup if cloud was empty
         if restored_groups == 0:
-            bak_file = os.path.join(DATA_DIR, "backups", "groups.json.bak")
-            if os.path.exists(bak_file):
-                bak_data = read_json(bak_file, {})
-                if bak_data:
-                    write_json(GROUPS_FILE, bak_data)
-                    restored_groups = len(bak_data)
-                    source = "Local Snapshot Backup"
+            for candidate in ["groups_config.json.bak", "groups.json.bak"]:
+                bak_file = os.path.join(BACKUPS_DIR, candidate)
+                if os.path.exists(bak_file):
+                    bak_data = read_json(bak_file, {})
+                    if bak_data:
+                        write_json(GROUPS_FILE, bak_data)
+                        restored_groups = len(bak_data)
+                        source = "Local Snapshot Backup"
+                        break
 
         if restored_clients == 0:
-            bak_cfile = os.path.join(DATA_DIR, "backups", "clients.json.bak")
-            if os.path.exists(bak_cfile):
-                bak_cdata = read_json(bak_cfile, {})
-                if bak_cdata:
-                    write_json(CLIENTS_FILE, bak_cdata)
-                    restored_clients = len(bak_cdata)
+            for candidate in ["clients_database.json.bak", "clients.json.bak"]:
+                bak_cfile = os.path.join(BACKUPS_DIR, candidate)
+                if os.path.exists(bak_cfile):
+                    bak_cdata = read_json(bak_cfile, {})
+                    if bak_cdata:
+                        write_json(CLIENTS_FILE, bak_cdata)
+                        restored_clients = len(bak_cdata)
+                        break
 
         # 3. Trigger auto scan of existing chats if bot is already in groups
         current_groups = read_json(GROUPS_FILE, {})
@@ -2118,6 +2494,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         now_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
         if action_type == "list" or action_type == "list_groups":
+            groups = recall_groups_storage()
             text = (
                 f"📋 <b>បញ្ជីឈ្មោះអតិថិជន & ក្រុមទាំងអស់ ({len(groups)} ក្រុម):</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
@@ -2125,6 +2502,33 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             )
             try:
                 await query.edit_message_text(text, parse_mode="HTML", reply_markup=get_groups_interactive_keyboard())
+            except Exception:
+                pass
+            return
+
+        elif action_type in ["recall", "recall_github"]:
+            recalled = pull_from_github_python()
+            if not recalled:
+                recalled = recall_groups_storage()
+            groups = recalled or read_json(GROUPS_FILE, {})
+            text = (
+                f"📥 <b>បានហៅបញ្ជីក្រុមមកវិញជោគជ័យ! ({len(groups)} ក្រុម)</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🌐 <b>ប្រភព៖</b> GitHub Repository + Local Persistent Vault\n"
+                "✅ ទិន្នន័យត្រូវបានផ្ទៀងផ្ទាត់ និងចងចាំក្នុង Bot រួចរាល់!\n\n"
+                "👇 <i>សូមចុចលើប៊ូតុងឈ្មោះក្រុម ដើម្បីមើល Profile និងកំណត់សិទ្ធិ៖</i>"
+            )
+            try:
+                await query.edit_message_text(text, parse_mode="HTML", reply_markup=get_groups_interactive_keyboard())
+            except Exception:
+                pass
+            return
+
+        elif action_type in ["sync", "sync_github"]:
+            success = sync_to_github_python("Admin Button Trigger")
+            alert_msg = "✅ បានធ្វើសមកាលកម្ម (Auto-Sync) ទៅកាន់ GitHub Repository ដោយជោគជ័យ!" if success else "⚠️ មិនទាន់អាច Sync បានទេ សូមពិនិត្យ GITHUB_TOKEN និង GITHUB_REPO ក្នុង Settings!"
+            try:
+                await query.answer(alert_msg, show_alert=True)
             except Exception:
                 pass
             return
@@ -2379,6 +2783,131 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 pass
 
 # ----------------- CHAT MEMBER & BOT JOIN HANDLERS -----------------
+async def chat_migration_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Update group ID automatically when Telegram migrates a group to supergroup"""
+    message = update.effective_message
+    if not message:
+        return
+
+    old_id = str(message.chat_id)
+    new_id = str(message.migrate_to_chat_id) if message.migrate_to_chat_id else None
+    if not new_id:
+        return
+
+    logger.info(f"🔄 Group migration detected: {old_id} -> {new_id}")
+
+    groups = read_json(GROUPS_FILE, {})
+    clients = read_json(CLIENTS_FILE, {})
+
+    changed = False
+    if old_id in groups:
+        groups[new_id] = groups[old_id]
+        groups[new_id]["chat_id"] = int(new_id) if new_id.lstrip("-").isdigit() else new_id
+        groups[new_id]["migrated_from"] = old_id
+        del groups[old_id]
+        write_json(GROUPS_FILE, groups)
+        changed = True
+
+    if old_id in clients:
+        clients[new_id] = clients[old_id]
+        clients[new_id]["client_group_id"] = int(new_id) if new_id.lstrip("-").isdigit() else new_id
+        del clients[old_id]
+        write_json(CLIENTS_FILE, clients)
+        changed = True
+
+    if changed:
+        logger.info(f"✅ Migrated group config from {old_id} to {new_id}")
+
+async def execute_fix_admin_rights_bot(chat_id: str, chat_title: str, context: ContextTypes.DEFAULT_TYPE):
+    """Auto-Admin-Refresh Logic:
+    Automatically checks Telegram bot permissions, updates groups_config.json,
+    and refreshes the admin rights cache when the bot detects it is not an admin in a new group."""
+    try:
+        cid_int = int(chat_id)
+    except Exception:
+        return
+
+    groups = read_json(GROUPS_FILE, {})
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    is_admin = False
+    admin_status = "unknown"
+    admin_rights = {
+        "can_delete_messages": True,
+        "can_restrict_members": True,
+        "can_pin_messages": True,
+        "can_invite_users": True,
+        "can_manage_chat": True
+    }
+    admin_ids = ["240224709"]
+
+    try:
+        bot_member = await context.bot.get_chat_member(chat_id=cid_int, user_id=context.bot.id)
+        admin_status = bot_member.status
+        is_admin = bot_member.status in ["administrator", "creator"]
+        if hasattr(bot_member, "can_delete_messages"):
+            admin_rights["can_delete_messages"] = getattr(bot_member, "can_delete_messages", False)
+            admin_rights["can_restrict_members"] = getattr(bot_member, "can_restrict_members", False)
+            admin_rights["can_pin_messages"] = getattr(bot_member, "can_pin_messages", False)
+            admin_rights["can_invite_users"] = getattr(bot_member, "can_invite_users", False)
+            admin_rights["can_manage_chat"] = getattr(bot_member, "can_manage_chat", False)
+    except Exception as e:
+        logger.debug(f"get_chat_member in auto-admin-refresh: {e}")
+
+    try:
+        admins = await context.bot.get_chat_administrators(chat_id=cid_int)
+        for adm in admins:
+            if adm.user and str(adm.user.id) not in admin_ids:
+                admin_ids.append(str(adm.user.id))
+    except Exception as e:
+        logger.debug(f"get_chat_administrators in auto-admin-refresh: {e}")
+
+    if chat_id in groups:
+        groups[chat_id]["bot_is_admin"] = is_admin
+        groups[chat_id]["admin_status"] = admin_status
+        groups[chat_id]["admin_rights"] = admin_rights
+        groups[chat_id]["admin_ids"] = list(set(admin_ids))
+        groups[chat_id]["last_admin_check"] = now_str
+        groups[chat_id]["last_permission_refresh"] = now_str
+        write_json(GROUPS_FILE, groups)
+
+    logger.info(f"🔄 [Auto-Admin-Refresh] Group {chat_id} ({chat_title}): Bot is Admin={is_admin}, Status={admin_status}")
+
+async def fix_admin_rights_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command /fix_admin_rights or /fixadmin:
+    Manually or automatically triggers the Auto-Admin-Refresh logic for this group.
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    if not chat or chat.type not in ["group", "supergroup"]:
+        return await send_clean_bot_response(update, context, "⚠️ សូមប្រើពាក្យបញ្ជានេះនៅក្នុង Group ឬ Supergroup ប៉ុណ្ណោះ!", delete_seconds=15)
+
+    is_adm = await check_admin(update, context)
+    if not is_adm and str(user.id) not in SUPER_ADMIN_IDS:
+        return await send_clean_bot_response(update, context, "⛔ ពាក្យបញ្ជានេះសម្រាប់តែ Admin ប៉ុណ្ណោះ!", delete_seconds=15)
+
+    chat_id = str(chat.id)
+    chat_title = chat.title or "Telegram Group"
+    await execute_fix_admin_rights_bot(chat_id, chat_title, context)
+
+    groups = read_json(GROUPS_FILE, {})
+    g = groups.get(chat_id, {})
+    is_bot_adm = g.get("bot_is_admin", False)
+    status_text = "🟢 ជា Admin រួចរាល់ (Active 100%)" if is_bot_adm else "⚠️ មិនទាន់ជា Admin (សូម Promote Bot ជា Admin)"
+
+    reply = (
+        "🔄 <b>[AUTO-ADMIN-REFRESH TRIGGERED]</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 <b>ក្រុម:</b> <code>{chat_title}</code>\n"
+        f"📍 <b>Chat ID:</b> <code>{chat_id}</code>\n"
+        f"🤖 <b>ស្ថានភាព Bot:</b> {status_text}\n"
+        f"👑 <b>ចំនួន Admin បានកត់ត្រា:</b> {len(g.get('admin_ids', []))} នាក់\n"
+        f"🕒 <b>បាន Refresh កាលពី:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "✅ <i>បានកែប្រែ និងធ្វើបច្ចុប្បន្នភាព Permission Cache ជោគជ័យ!</i>"
+    )
+    await send_clean_bot_response(update, context, reply, delete_seconds=30)
+
 async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ចាប់យកពេល Bot ត្រូវបាន Added ឬ Promoted ក្នុង Group Telegram"""
     chat_member: ChatMemberUpdated = update.my_chat_member
@@ -2456,6 +2985,25 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
             logger.info(f"📢 បានផ្ញើសារដំណឹងក្រុមថ្មី {chat_title} ទៅ Master Admin ID {ADMIN_ID} រួចរាល់!")
         except Exception as err:
             logger.warning(f"Failed to send new group alert to master admin: {err}")
+
+        # 3. Auto-Admin-Refresh Trigger when bot detects it is not an admin in new group:
+        settings_data = read_json(SETTINGS_FILE, {})
+        auto_refresh_enabled = settings_data.get("auto_admin_refresh_enabled", True)
+        if auto_refresh_enabled:
+            if new_status != "administrator":
+                logger.info(f"🔄 [Auto-Admin-Refresh] Bot not admin in new group {chat_id} ({chat_title}). Triggering /fix-admin-rights logic automatically...")
+            else:
+                logger.info(f"🟢 [Auto-Admin-Refresh] Bot added as admin in {chat_id} ({chat_title}). Updating permission cache...")
+            asyncio.create_task(execute_fix_admin_rights_bot(chat_id, chat_title, context))
+
+    elif new_status == "administrator" and old_status != "administrator":
+        chat_id = str(chat.id)
+        chat_title = chat.title or "Telegram Group"
+        settings_data = read_json(SETTINGS_FILE, {})
+        auto_refresh_enabled = settings_data.get("auto_admin_refresh_enabled", True)
+        if auto_refresh_enabled:
+            logger.info(f"🎉 [Auto-Admin-Refresh] Bot promoted to admin in {chat_id} ({chat_title}). Triggering fix-admin-rights logic...")
+            asyncio.create_task(execute_fix_admin_rights_bot(chat_id, chat_title, context))
 
 async def chat_member_update_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
@@ -3347,6 +3895,10 @@ def main():
     init_cloud_database()
     cloud_sync_on_startup()
 
+    # 🔒 Multi-Tier Memory Vault & GitHub Auto-Recall on Startup (Never Forget Groups)
+    recalled_boot_groups = recall_groups_storage()
+    logger.info(f"💾 [Bot Persistent Vault] Initialized with {len(recalled_boot_groups)} groups permanently remembered!")
+
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init_setup).build()
 
     # User & Group Commands
@@ -3379,6 +3931,8 @@ def main():
     app.add_handler(CommandHandler("members", clients_list_command))
     app.add_handler(CommandHandler("groups", groups_list_command))
     app.add_handler(CommandHandler("list", groups_list_command))
+    app.add_handler(CommandHandler("recall", groups_list_command))
+    app.add_handler(CommandHandler("recallgroups", groups_list_command))
     app.add_handler(CommandHandler("delgroup", delete_group_command))
     app.add_handler(CommandHandler("deletegroup", delete_group_command))
     app.add_handler(CommandHandler("removegroup", delete_group_command))
@@ -3396,12 +3950,16 @@ def main():
     app.add_handler(CommandHandler("restore", restore_database_command))
     app.add_handler(CommandHandler("restoredb", restore_database_command))
     app.add_handler(CommandHandler("recover", restore_database_command))
+    app.add_handler(CommandHandler("fix_admin_rights", fix_admin_rights_command))
+    app.add_handler(CommandHandler("fixadmin", fix_admin_rights_command))
+    app.add_handler(CommandHandler("refreshadmin", fix_admin_rights_command))
 
     # Callback Query (Buttons)
     app.add_handler(CallbackQueryHandler(callback_query_handler))
 
     # Message & Member Update Handlers
     app.add_handler(ChatMemberHandler(my_chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, chat_migration_handler))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, chat_member_update_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, file_inspector))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_inspector))
