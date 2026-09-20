@@ -653,6 +653,10 @@ def get_main_menu_keyboard(bot_username: str = ""):
             InlineKeyboardButton("📖 សៀវភៅជំនួយ", callback_data="btn_help"),
         ],
         [
+            InlineKeyboardButton("🔄 Sync បញ្ជីក្រុម (Sync Groups)", callback_data="adm_sync_github"),
+            InlineKeyboardButton("📥 ហៅក្រុមមកវិញ (Recall)", callback_data="adm_recall_github"),
+        ],
+        [
             InlineKeyboardButton("➕ Add Bot ទៅកាន់ Group ផ្សេងទៀត", url=bot_link),
         ],
         [
@@ -671,6 +675,7 @@ def get_back_keyboard(bot_username: str = ""):
     keyboard = [
         [
             InlineKeyboardButton("🔙 ត្រឡប់ទៅ Menu មេ", callback_data="btn_main_menu"),
+            InlineKeyboardButton("⚡ Sync ក្រុម", callback_data="adm_sync_github"),
             InlineKeyboardButton("🔄 Refresh", callback_data="btn_refresh"),
         ],
         [
